@@ -5,7 +5,8 @@ admission policy layers: `manifest_validator` for Kubernetes YAML manifests,
 `dockerfile_validator` for Dockerfiles, `helm_scanner` for Helm values/chart
 hardening, `layer_scanner` for OCI image layer metadata review,
 `workload_identity_checker` for multi-cloud workload identity posture review,
-and the reusable OPA/Gatekeeper/Kyverno policy library under `policies/`.
+`aks_node_pool_analyzer` for exported AKS node-pool posture review, and the
+reusable OPA/Gatekeeper/Kyverno policy library under `policies/`.
 
 ---
 
@@ -34,15 +35,20 @@ CLI layer (Click + Rich table)
 No network calls, no subprocess invocations, no cluster access — the validators
 are purely static analysis tools that run offline.
 
-The Helm and layer scanners follow the same offline model. They parse local YAML
-or JSON artifacts and emit structured findings without pulling images, talking
-to clusters, or invoking Helm/Docker CLIs.
+The Helm, layer, and AKS node-pool scanners follow the same offline model. They
+parse local YAML or JSON artifacts and emit structured findings without pulling
+images, talking to clusters, or invoking Helm/Docker/Kubernetes CLIs.
 
 The workload identity scanner follows the same pattern. It parses local
 multi-document Kubernetes YAML, resolves supported workload kinds plus related
 `ServiceAccount` documents, and emits structured findings for EKS IRSA, GKE
 Workload Identity, and Azure Workload Identity anti-patterns without cluster
 API access.
+
+The AKS node-pool analyzer parses exported Azure CLI JSON and applies explicit
+hardening checks for node public IP exposure, EncryptionAtHost, FIPS usage,
+system-pool isolation, and explicit subnet placement without contacting Azure
+APIs.
 
 The admission policies use the same control intent, but package it for cluster
 enforcement with Gatekeeper `ConstraintTemplate` / `Constraint` manifests and
@@ -133,12 +139,13 @@ Both use `@dataclass` for zero-boilerplate construction, equality comparison, an
 repr. The `Severity` enums inherit from `str` so they serialise naturally to JSON
 without a custom encoder.
 
-### HelmFinding / LayerFinding
+### HelmFinding / LayerFinding / AKSFinding
 
 `helm_scanner` emits `HelmFinding` objects keyed by rule IDs such as
-`HELM001` and `HELM014`, while `layer_scanner` emits `LayerFinding` objects
-keyed by `LAY-001` through `LAY-007`. Both keep the same design goals as the
-manifest and Dockerfile validators: explicit rule IDs, human-readable
+`HELM001` and `HELM014`, `layer_scanner` emits `LayerFinding` objects keyed by
+`LAY-001` through `LAY-007`, and `aks_node_pool_analyzer` emits `AKSFinding`
+objects keyed by `AKS-001` through `AKS-005`. All keep the same design goals
+as the manifest and Dockerfile validators: explicit rule IDs, human-readable
 remediation guidance, and deterministic serialisable results for CI pipelines.
 
 ---
@@ -153,6 +160,7 @@ cli validate-dockerfile PATH
 cli scan-helm-values  PATH [--chart-name NAME]
 cli scan-helm-chart   PATH
 cli scan-image-layers PATH [--image-tag TAG]
+cli scan-aks-nodepools PATH [--cluster-name NAME]
 cli scan-workload-identity PATH
 ```
 
@@ -170,6 +178,11 @@ importing Click or Rich.
 `scan-image-layers` accepts a JSON list of layer metadata objects or an object
 with top-level `image_tag` and `layers` keys, making it easy to feed exported
 metadata from a CI step into the scanner without shelling out from the tool.
+
+`scan-aks-nodepools` accepts either direct `az aks nodepool list` JSON or a
+reduced object containing `clusterName` and `node_pools` or
+`agentPoolProfiles`. This keeps AKS posture review offline and deterministic
+for CI or change-review pipelines.
 
 `scan-workload-identity` accepts a Kubernetes YAML bundle containing any mix of
 `ServiceAccount`, `Pod`, `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, and

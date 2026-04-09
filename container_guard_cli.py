@@ -26,6 +26,7 @@ from rich.console import Console
 from rich.table import Table
 
 from docker.layer_scanner import LayerFile, LayerMetadata, LayerScanner
+from kubernetes.aks_node_pool_analyzer import analyze_node_pools, node_pool_from_dict
 from kubernetes.workload_identity_checker import check_many, load_configs_from_file
 from validators.dockerfile_validator import Severity as DSeverity
 from validators.dockerfile_validator import validate_dockerfile
@@ -137,6 +138,37 @@ def _load_workload_identity_results(path: Path):
         raise click.ClickException("No supported Kubernetes workloads found in the provided YAML.")
 
     return check_many(configs)
+
+
+def _load_aks_node_pool_report(path: Path, cluster_name: str):
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    if isinstance(payload, list):
+        node_pool_items = payload
+        resolved_cluster_name = cluster_name or "aks-nodepools"
+    elif isinstance(payload, dict):
+        node_pool_items = payload.get("node_pools")
+        if node_pool_items is None:
+            node_pool_items = payload.get("agentPoolProfiles", [])
+        resolved_cluster_name = cluster_name or str(
+            payload.get("clusterName") or payload.get("name") or "aks-nodepools"
+        )
+    else:
+        raise click.ClickException(
+            "AKS node pool JSON must be a list or an object with 'node_pools' or 'agentPoolProfiles'."
+        )
+
+    if not isinstance(node_pool_items, list):
+        raise click.ClickException("The AKS node pool payload must resolve to a list.")
+
+    invalid_items = [index for index, item in enumerate(node_pool_items) if not isinstance(item, dict)]
+    if invalid_items:
+        raise click.ClickException(f"AKS node pool entries must be JSON objects (invalid index: {invalid_items[0]}).")
+
+    return analyze_node_pools(
+        [node_pool_from_dict(item) for item in node_pool_items],
+        cluster_name=resolved_cluster_name,
+    )
 
 
 @cli.command("validate-manifest")
@@ -332,7 +364,48 @@ def scan_image_layers_cmd(path: Path, image_tag: str, max_layers: int, max_layer
     )
     console.print(f"\nSummary: {report.summary()}", markup=False)
 
-    if _has_blocking_findings(report.findings):
+    if any(f.severity.value in {"HIGH", "CRITICAL"} for f in report.findings):
+        console.print("[bold red]Exiting 1 — HIGH or CRITICAL findings detected.[/bold red]")
+        sys.exit(1)
+
+
+@cli.command("scan-aks-nodepools")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--cluster-name", default="", help="Optional AKS cluster label shown in the report.")
+def scan_aks_nodepools_cmd(path: Path, cluster_name: str) -> None:
+    """Scan AKS node pool posture exported as JSON."""
+    report = _load_aks_node_pool_report(path, cluster_name=cluster_name)
+
+    if not report.findings:
+        _print_success(path, noun="AKS node pool export")
+        console.print(f"Summary: {report.summary()}", markup=False)
+        sys.exit(0)
+
+    _render_findings_table(
+        f"AKS node pool findings: {path}",
+        [
+            ("Severity", "bold"),
+            ("Check ID", None),
+            ("Pool", None),
+            ("Title", None),
+            ("Detail", "dim"),
+            ("Remediation", None),
+        ],
+        [
+            [
+                f"[{_SEVERITY_STYLE.get(f.severity, 'white')}]{f.severity}[/{_SEVERITY_STYLE.get(f.severity, 'white')}]",
+                f.check_id,
+                f.pool_name,
+                f.title,
+                f.detail,
+                f.remediation,
+            ]
+            for f in report.findings
+        ],
+    )
+    console.print(f"\nSummary: {report.summary()}", markup=False)
+
+    if any(f.severity in {"HIGH", "CRITICAL"} for f in report.findings):
         console.print("[bold red]Exiting 1 — HIGH or CRITICAL findings detected.[/bold red]")
         sys.exit(1)
 

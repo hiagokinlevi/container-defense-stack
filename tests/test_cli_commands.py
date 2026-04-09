@@ -126,6 +126,64 @@ def test_scan_image_layers_succeeds_for_clean_payload(tmp_path: Path) -> None:
     assert "LayerScanReport [clean:1.0.0]" in result.output
 
 
+def test_scan_aks_nodepools_reports_hardening_findings(tmp_path: Path) -> None:
+    payload_path = tmp_path / "aks-nodepools.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "clusterName": "prod-aks",
+                "node_pools": [
+                    {
+                        "name": "systempool",
+                        "mode": "System",
+                        "osType": "Linux",
+                        "enableNodePublicIP": True,
+                        "enableEncryptionAtHost": False,
+                        "enableFIPS": False,
+                        "onlyCriticalAddonsEnabled": False,
+                        "vnetSubnetID": "",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["scan-aks-nodepools", str(payload_path)])
+
+    assert result.exit_code == 1
+    assert "AKS-001" in result.output
+    assert "prod-aks" in result.output
+
+
+def test_scan_aks_nodepools_succeeds_for_hardened_export(tmp_path: Path) -> None:
+    payload_path = tmp_path / "aks-nodepools.json"
+    payload_path.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "userpool-a",
+                    "mode": "User",
+                    "osType": "Linux",
+                    "enableNodePublicIP": False,
+                    "enableEncryptionAtHost": True,
+                    "enableFIPS": True,
+                    "vnetSubnetID": "/subscriptions/test/subnets/apps",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["scan-aks-nodepools", str(payload_path), "--cluster-name", "clean-aks"],
+    )
+
+    assert result.exit_code == 0
+    assert "AKSNodePoolReport [clean-aks]" in result.output
+
+
 def test_scan_workload_identity_reports_high_findings(tmp_path: Path) -> None:
     manifest_path = tmp_path / "workloads.yaml"
     manifest_path.write_text(

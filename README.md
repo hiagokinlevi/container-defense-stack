@@ -1,6 +1,6 @@
 # container-defense-stack
 
-Container and Kubernetes security toolkit providing Dockerfile hardening guides, secure workload manifests, RBAC baselines, network policies, and manifest validators for DevSecOps teams.
+Container and Kubernetes security toolkit providing Dockerfile hardening guides, secure workload manifests, RBAC baselines, network policies, manifest validators, and offline AKS node-pool hardening checks for DevSecOps teams.
 
 ## Objective
 
@@ -18,6 +18,7 @@ Teams frequently deploy containers with excessive privileges, missing resource l
 - Segmenting namespaces with network policies
 - Validating manifests before deployment
 - Enforcing Pod guardrails with reusable OPA and Gatekeeper policies
+- Reviewing exported AKS node-pool posture before production rollout
 - Training teams on container security fundamentals
 
 ## Ethical Disclaimer
@@ -56,6 +57,9 @@ k1n-container-guard scan-helm-chart charts/api
 
 # Scan OCI/Docker layer metadata exported as JSON
 k1n-container-guard scan-image-layers image-layers.json --image-tag ghcr.io/acme/api:1.2.3
+
+# Scan exported AKS node pool posture JSON
+k1n-container-guard scan-aks-nodepools aks-nodepools.json --cluster-name prod-aks
 
 # Scan Kubernetes workload identity posture from manifests
 k1n-container-guard scan-workload-identity workloads.yaml
@@ -121,6 +125,17 @@ The `scan-image-layers` command accepts either a raw JSON list of layer objects
 or an object with `image_tag` and `layers` keys. Each layer supports
 `layer_id`, `created_by`, `size_bytes`, `layer_index`, and an optional `files`
 list containing `path`, `mode`, and `size`.
+
+`scan-aks-nodepools` accepts either a raw JSON list of node-pool objects or an
+object with `node_pools` or `agentPoolProfiles` keys. This keeps the workflow
+compatible with direct `az aks nodepool list` output and reduced posture
+snapshots exported from `az aks show`.
+
+## Cloud Provider Packs
+
+- [docs/aks-node-pool-hardening.md](docs/aks-node-pool-hardening.md) documents
+  the shipped AKS node-pool hardening baseline and the `scan-aks-nodepools`
+  offline review workflow.
 
 The workload identity scanner merges `ServiceAccount` annotations with workload
 pod-template annotations so the same manifest bundle can be reviewed before it

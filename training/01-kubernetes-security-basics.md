@@ -197,3 +197,18 @@ spec:
 - [ ] RBAC Role with specific verbs and resourceNames, not wildcards
 - [ ] Default-deny NetworkPolicy in every namespace
 - [ ] `resources.requests` and `resources.limits` set on every container
+
+---
+
+## 5. Managed Cluster Node Pools Still Need Hardening
+
+Managed Kubernetes does not remove node-level risk. For AKS specifically:
+
+- keep `System` and `User` pools separate
+- disable node public IP addresses
+- enable EncryptionAtHost where sensitive workloads run
+- prefer FIPS-enabled Linux images when compliance requires it
+- place each pool in an explicit subnet for auditable segmentation
+
+The repository's `scan-aks-nodepools` workflow lets you review exported AKS
+node-pool posture offline before rollout or during change review.
