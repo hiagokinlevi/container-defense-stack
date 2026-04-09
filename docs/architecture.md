@@ -65,7 +65,9 @@ dependencies minimal.
 
 `validate_dockerfile(path)` reads the file as plain text and processes it
 line-by-line. It tracks two boolean accumulators (`has_user`, `has_healthcheck`)
-that are checked after the loop for file-level findings.
+that are checked after the loop for file-level findings, and it tracks the last
+`FROM` instruction so the final runtime stage can be evaluated for broad base
+images that should be replaced with distroless or other minimal runtimes.
 
 Per-line checks use:
 - `str.upper().startswith(...)` for instruction-type matching (case-insensitive,
@@ -141,7 +143,7 @@ importing Click or Rich.
 
 ### Adding a Dockerfile rule
 
-1. Add a new `rule_id` constant (e.g., `DF006`).
+1. Add a new `rule_id` constant (e.g., `DF007`).
 2. Add the check inside the `for i, line in enumerate(lines)` loop, or as a
    post-loop check for file-level properties.
 3. Add a test in `tests/test_dockerfile_validator.py`.

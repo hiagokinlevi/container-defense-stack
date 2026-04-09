@@ -37,14 +37,21 @@ training/           — Tutorials and labs
 ## How to Run
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Validate a Kubernetes manifest
 k1n-container-guard validate-manifest --path deployment.yaml
 
-# Validate a directory of manifests
-k1n-container-guard validate-bundle --path ./k8s/
+# Validate a Dockerfile
+k1n-container-guard validate-dockerfile --path Dockerfile
 ```
+
+If you are working in an offline or PEP 668-managed environment, create the
+virtualenv with `python3 -m venv --system-site-packages .venv` and install with
+`pip install -e . --no-deps --no-build-isolation` to reuse the locally available
+Python packages.
 
 ## License
 

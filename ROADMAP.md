@@ -12,7 +12,7 @@
 ## v0.2 — Helm & OCI
 - [ ] Helm chart values scanner
 - [ ] OCI image layer inspection
-- [ ] Distroless base image recommendations
+- [x] Distroless base image recommendations
 
 ## v0.3 — Admission Webhook
 - [ ] OPA/Gatekeeper policy library

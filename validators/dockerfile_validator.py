@@ -2,9 +2,10 @@
 Dockerfile security validator.
 
 Checks common Dockerfile misconfigurations: running as root, using latest tag,
-ADD instead of COPY, secrets in ENV, no HEALTHCHECK.
+ADD instead of COPY, secrets in ENV, no HEALTHCHECK, and broad runtime bases.
 """
 from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -26,17 +27,57 @@ class DockerFinding:
     remediation: str
 
 
+_FROM_PATTERN = re.compile(r"^FROM\s+([^\s]+)(?:\s+AS\s+\S+)?$", re.IGNORECASE)
+_MINIMAL_BASE_HINTS = ("distroless", "scratch", "slim", "alpine", "chiseled", "wolfi")
+_BROAD_RUNTIME_PREFIXES = (
+    "ubuntu",
+    "debian",
+    "centos",
+    "fedora",
+    "redhat",
+    "rockylinux",
+    "almalinux",
+    "amazonlinux",
+    "python",
+    "node",
+    "openjdk",
+)
+
+
+def _extract_runtime_base(stripped_line: str) -> str | None:
+    """Return the image reference used in a FROM instruction, if present."""
+    match = _FROM_PATTERN.match(stripped_line)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _is_broad_runtime_base(image_ref: str) -> bool:
+    """Heuristic: broad runtime images should prefer minimal/distroless bases."""
+    lowered = image_ref.lower()
+    if any(token in lowered for token in _MINIMAL_BASE_HINTS):
+        return False
+    return lowered.startswith(_BROAD_RUNTIME_PREFIXES)
+
+
 def validate_dockerfile(dockerfile_path: Path) -> list[DockerFinding]:
     """Parse a Dockerfile and return a list of security findings."""
     findings: list[DockerFinding] = []
     lines = dockerfile_path.read_text().splitlines()
     has_user = False
     has_healthcheck = False
+    final_from_line = 0
+    final_runtime_base: str | None = None
 
     for i, line in enumerate(lines, start=1):
         stripped = line.strip()
         if stripped.startswith("#") or not stripped:
             continue
+
+        runtime_base = _extract_runtime_base(stripped)
+        if runtime_base is not None:
+            final_from_line = i
+            final_runtime_base = runtime_base
 
         if stripped.upper().startswith("USER"):
             user_val = stripped.split(None, 1)[1] if len(stripped.split()) > 1 else ""
@@ -84,6 +125,16 @@ def validate_dockerfile(dockerfile_path: Path) -> list[DockerFinding]:
             rule_id="DF005", severity=Severity.LOW, line=0,
             message="No HEALTHCHECK instruction",
             remediation="Add HEALTHCHECK to enable container health monitoring",
+        ))
+
+    if final_runtime_base and _is_broad_runtime_base(final_runtime_base):
+        findings.append(DockerFinding(
+            rule_id="DF006", severity=Severity.MEDIUM, line=final_from_line,
+            message="Final runtime stage uses a broad base image instead of a minimal runtime base",
+            remediation=(
+                "Keep build tooling in an earlier stage and switch the final stage to a minimal base "
+                "such as distroless, scratch, or a language-specific slim/chiseled runtime image"
+            ),
         ))
 
     return findings

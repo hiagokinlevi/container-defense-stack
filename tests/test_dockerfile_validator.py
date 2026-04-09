@@ -102,3 +102,60 @@ def test_secure_dockerfile_passes(tmp_path: Path) -> None:
     assert bad == [], (
         f"Expected no HIGH findings for secure Dockerfile, got: {[(f.rule_id, f.message) for f in bad]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# DF006 — broad runtime base image
+# ---------------------------------------------------------------------------
+def test_broad_runtime_base_detected(tmp_path: Path) -> None:
+    """DF006 is raised when the final runtime stage uses a broad OS base."""
+    dockerfile = _write_dockerfile(tmp_path, """\
+        FROM golang:1.24 AS builder
+        WORKDIR /src
+        COPY . .
+        RUN go build -o app ./cmd/server
+
+        FROM ubuntu:22.04 AS runtime
+        WORKDIR /app
+        COPY --from=builder /src/app /app/app
+        USER 10001
+        HEALTHCHECK CMD ["/app/app", "--healthcheck"]
+        CMD ["/app/app"]
+    """)
+    findings = validate_dockerfile(dockerfile)
+    rule_ids = [f.rule_id for f in findings]
+    assert "DF006" in rule_ids, "Expected DF006 for a broad ubuntu runtime base"
+
+
+def test_distroless_runtime_not_flagged(tmp_path: Path) -> None:
+    """DF006 is not raised when the final stage already uses distroless."""
+    dockerfile = _write_dockerfile(tmp_path, """\
+        FROM golang:1.24 AS builder
+        WORKDIR /src
+        COPY . .
+        RUN go build -o app ./cmd/server
+
+        FROM gcr.io/distroless/static:nonroot
+        COPY --from=builder /src/app /app/app
+        USER 65532
+        HEALTHCHECK CMD ["/app/app", "--healthcheck"]
+        CMD ["/app/app"]
+    """)
+    findings = validate_dockerfile(dockerfile)
+    rule_ids = [f.rule_id for f in findings]
+    assert "DF006" not in rule_ids
+
+
+def test_slim_runtime_not_flagged(tmp_path: Path) -> None:
+    """DF006 is not raised for already-minimal slim runtime images."""
+    dockerfile = _write_dockerfile(tmp_path, """\
+        FROM python:3.11-slim AS runtime
+        WORKDIR /app
+        COPY . .
+        USER 10001
+        HEALTHCHECK CMD python -c "import sys; sys.exit(0)"
+        CMD ["python", "app.py"]
+    """)
+    findings = validate_dockerfile(dockerfile)
+    rule_ids = [f.rule_id for f in findings]
+    assert "DF006" not in rule_ids
