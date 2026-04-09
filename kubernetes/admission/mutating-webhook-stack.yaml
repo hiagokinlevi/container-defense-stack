@@ -1,0 +1,175 @@
+---
+# Hardened mutating webhook deployment baseline.
+# Replace the image reference with your approved webhook image and digest.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: admission-security
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: metadata-hardening-mutating-webhook
+  namespace: admission-security
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metadata-hardening-mutating-webhook
+  namespace: admission-security
+  labels:
+    app.kubernetes.io/name: metadata-hardening-mutating-webhook
+    app.kubernetes.io/component: admission-webhook
+    app.kubernetes.io/part-of: container-defense-stack
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: metadata-hardening-mutating-webhook
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: metadata-hardening-mutating-webhook
+        app.kubernetes.io/component: admission-webhook
+        app.kubernetes.io/part-of: container-defense-stack
+    spec:
+      serviceAccountName: metadata-hardening-mutating-webhook
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webhook
+          image: ghcr.io/hiagokinlevi/metadata-hardening-mutating-webhook:1.0.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --listen=:8443
+            - --tls-cert-file=/tls/tls.crt
+            - --tls-private-key-file=/tls/tls.key
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: https
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: https
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tls
+          secret:
+            secretName: metadata-hardening-mutating-webhook-tls
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metadata-hardening-mutating-webhook
+  namespace: admission-security
+spec:
+  selector:
+    app.kubernetes.io/name: metadata-hardening-mutating-webhook
+  ports:
+    - name: https
+      port: 443
+      protocol: TCP
+      targetPort: https
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: metadata-hardening-mutating-webhook
+  namespace: admission-security
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: metadata-hardening-mutating-webhook
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: metadata-hardening-mutating-webhook-selfsigned
+  namespace: admission-security
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: metadata-hardening-mutating-webhook-cert
+  namespace: admission-security
+spec:
+  secretName: metadata-hardening-mutating-webhook-tls
+  dnsNames:
+    - metadata-hardening-mutating-webhook.admission-security.svc
+    - metadata-hardening-mutating-webhook.admission-security.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: metadata-hardening-mutating-webhook-selfsigned
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: metadata-hardening-mutating-webhook.k1n.dev
+  annotations:
+    cert-manager.io/inject-ca-from: admission-security/metadata-hardening-mutating-webhook-cert
+webhooks:
+  - name: metadata-hardening.mutating.k1n.dev
+    admissionReviewVersions:
+      - v1
+    sideEffects: None
+    timeoutSeconds: 5
+    failurePolicy: Fail
+    reinvocationPolicy: Never
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        admission.k1n.dev/enforce: "true"
+    clientConfig:
+      service:
+        namespace: admission-security
+        name: metadata-hardening-mutating-webhook
+        path: /mutate
+        port: 443
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: "*"

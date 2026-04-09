@@ -1,0 +1,174 @@
+---
+# Hardened validating webhook deployment baseline.
+# Replace the image reference with your approved webhook image and digest.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: admission-security
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pod-security-validating-webhook
+  namespace: admission-security
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pod-security-validating-webhook
+  namespace: admission-security
+  labels:
+    app.kubernetes.io/name: pod-security-validating-webhook
+    app.kubernetes.io/component: admission-webhook
+    app.kubernetes.io/part-of: container-defense-stack
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pod-security-validating-webhook
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pod-security-validating-webhook
+        app.kubernetes.io/component: admission-webhook
+        app.kubernetes.io/part-of: container-defense-stack
+    spec:
+      serviceAccountName: pod-security-validating-webhook
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webhook
+          image: ghcr.io/hiagokinlevi/pod-security-validating-webhook:1.0.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --listen=:8443
+            - --tls-cert-file=/tls/tls.crt
+            - --tls-private-key-file=/tls/tls.key
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: https
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: https
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tls
+          secret:
+            secretName: pod-security-validating-webhook-tls
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pod-security-validating-webhook
+  namespace: admission-security
+spec:
+  selector:
+    app.kubernetes.io/name: pod-security-validating-webhook
+  ports:
+    - name: https
+      port: 443
+      protocol: TCP
+      targetPort: https
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pod-security-validating-webhook
+  namespace: admission-security
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pod-security-validating-webhook
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: pod-security-validating-webhook-selfsigned
+  namespace: admission-security
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: pod-security-validating-webhook-cert
+  namespace: admission-security
+spec:
+  secretName: pod-security-validating-webhook-tls
+  dnsNames:
+    - pod-security-validating-webhook.admission-security.svc
+    - pod-security-validating-webhook.admission-security.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: pod-security-validating-webhook-selfsigned
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: pod-security-validating-webhook.k1n.dev
+  annotations:
+    cert-manager.io/inject-ca-from: admission-security/pod-security-validating-webhook-cert
+webhooks:
+  - name: pod-security.validating.k1n.dev
+    admissionReviewVersions:
+      - v1
+    sideEffects: None
+    timeoutSeconds: 5
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        admission.k1n.dev/enforce: "true"
+    clientConfig:
+      service:
+        namespace: admission-security
+        name: pod-security-validating-webhook
+        path: /validate
+        port: 443
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+        scope: "*"

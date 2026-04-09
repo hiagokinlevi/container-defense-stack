@@ -61,6 +61,9 @@ Python packages.
   `Constraint` manifests for the same Pod security controls.
 - `policies/kyverno/` provides deployable `ClusterPolicy` manifests for the
   same deny-by-default Pod security controls.
+- `kubernetes/admission/` provides hardened validating and mutating webhook
+  deployment templates with cert-manager-backed TLS, opt-in namespace scoping,
+  and secure runtime defaults for teams building custom admission services.
 
 Apply the Gatekeeper library with:
 
@@ -74,6 +77,16 @@ Apply the Kyverno library with:
 ```bash
 kubectl apply -f policies/kyverno/
 ```
+
+Apply the admission webhook templates with:
+
+```bash
+kubectl apply -f kubernetes/admission/validating-webhook-stack.yaml
+kubectl apply -f kubernetes/admission/mutating-webhook-stack.yaml
+```
+
+Label target namespaces with `admission.k1n.dev/enforce=true` before enabling
+either webhook template so enforcement is opt-in until you complete validation.
 
 ## License
 

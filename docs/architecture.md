@@ -36,6 +36,13 @@ The admission policies use the same control intent, but package it for cluster
 enforcement with Gatekeeper `ConstraintTemplate` / `Constraint` manifests and
 Kyverno `ClusterPolicy` manifests.
 
+For teams building their own admission services, the repository also ships
+secure webhook deployment templates under `kubernetes/admission/`. Those
+templates cover the operational layer around admission logic: namespace
+hardening, TLS material via cert-manager, highly constrained webhook pods, and
+safe webhook configuration defaults such as `failurePolicy: Fail`,
+`sideEffects: None`, short timeouts, and namespace-level opt-in labels.
+
 ---
 
 ## YAML Parsing (manifest_validator)
@@ -152,6 +159,9 @@ equivalent Kyverno `ClusterPolicy` manifests:
    controls with per-rule `validate` blocks.
 4. Rule IDs such as `SEC001`, `SEC004`, and `SEC010` remain aligned across
    static validation and admission enforcement.
+5. `kubernetes/admission/*.yaml` provides reusable validating and mutating
+   webhook stacks for custom admission services that need a hardened deployment
+   baseline beyond policy-only artifacts.
 
 This keeps shift-left checks and cluster admission controls consistent, so a
 finding discovered in CI can be enforced with the same control at deploy time.

@@ -17,7 +17,7 @@
 ## v0.3 — Admission Webhook
 - [x] OPA/Gatekeeper policy library
 - [x] Kyverno policy equivalents
-- [ ] Webhook deployment manifests
+- [x] Webhook deployment manifests
 
 ## v0.4 — Cloud Provider Packs
 - [ ] AKS node pool hardening guide
