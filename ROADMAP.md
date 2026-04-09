@@ -20,6 +20,7 @@
 - [x] Webhook deployment manifests
 
 ## v0.4 — Cloud Provider Packs
+- [x] Multi-cloud workload identity manifest scanner
 - [ ] AKS node pool hardening guide
 - [ ] EKS managed node group hardening
 - [ ] GKE autopilot security baseline

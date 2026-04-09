@@ -56,6 +56,9 @@ k1n-container-guard scan-helm-chart charts/api
 
 # Scan OCI/Docker layer metadata exported as JSON
 k1n-container-guard scan-image-layers image-layers.json --image-tag ghcr.io/acme/api:1.2.3
+
+# Scan Kubernetes workload identity posture from manifests
+k1n-container-guard scan-workload-identity workloads.yaml
 ```
 
 If you are working in an offline or PEP 668-managed environment, create the
@@ -107,11 +110,22 @@ either webhook template so enforcement is opt-in until you complete validation.
 - `scan-image-layers` evaluates Docker/OCI layer metadata in JSON form so CI
   jobs can flag risky build history, oversized layers, remote fetches without
   checksum verification, and SUID/SGID binaries before release.
+- `scan-workload-identity` parses Kubernetes YAML offline and analyzes Pod,
+  Deployment, StatefulSet, DaemonSet, Job, and CronJob manifests for
+  multi-cloud workload identity misconfigurations such as default service
+  accounts paired with cloud credential env vars, overly broad IRSA roles,
+  shared cloud identities across workloads, and missing projected token
+  audience or expiry controls.
 
 The `scan-image-layers` command accepts either a raw JSON list of layer objects
 or an object with `image_tag` and `layers` keys. Each layer supports
 `layer_id`, `created_by`, `size_bytes`, `layer_index`, and an optional `files`
 list containing `path`, `mode`, and `size`.
+
+The workload identity scanner merges `ServiceAccount` annotations with workload
+pod-template annotations so the same manifest bundle can be reviewed before it
+ever reaches a cluster. That keeps EKS IRSA, GKE Workload Identity, and Azure
+Workload Identity posture checks available in offline CI and pre-deploy review.
 
 ## License
 

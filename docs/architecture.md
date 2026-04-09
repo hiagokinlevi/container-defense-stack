@@ -3,8 +3,9 @@
 This document describes the design of the repository's static validation and
 admission policy layers: `manifest_validator` for Kubernetes YAML manifests,
 `dockerfile_validator` for Dockerfiles, `helm_scanner` for Helm values/chart
-hardening, `layer_scanner` for OCI image layer metadata review, and the
-reusable OPA/Gatekeeper/Kyverno policy library under `policies/`.
+hardening, `layer_scanner` for OCI image layer metadata review,
+`workload_identity_checker` for multi-cloud workload identity posture review,
+and the reusable OPA/Gatekeeper/Kyverno policy library under `policies/`.
 
 ---
 
@@ -36,6 +37,12 @@ are purely static analysis tools that run offline.
 The Helm and layer scanners follow the same offline model. They parse local YAML
 or JSON artifacts and emit structured findings without pulling images, talking
 to clusters, or invoking Helm/Docker CLIs.
+
+The workload identity scanner follows the same pattern. It parses local
+multi-document Kubernetes YAML, resolves supported workload kinds plus related
+`ServiceAccount` documents, and emits structured findings for EKS IRSA, GKE
+Workload Identity, and Azure Workload Identity anti-patterns without cluster
+API access.
 
 The admission policies use the same control intent, but package it for cluster
 enforcement with Gatekeeper `ConstraintTemplate` / `Constraint` manifests and
@@ -146,6 +153,7 @@ cli validate-dockerfile PATH
 cli scan-helm-values  PATH [--chart-name NAME]
 cli scan-helm-chart   PATH
 cli scan-image-layers PATH [--image-tag TAG]
+cli scan-workload-identity PATH
 ```
 
 Both commands:
@@ -162,6 +170,13 @@ importing Click or Rich.
 `scan-image-layers` accepts a JSON list of layer metadata objects or an object
 with top-level `image_tag` and `layers` keys, making it easy to feed exported
 metadata from a CI step into the scanner without shelling out from the tool.
+
+`scan-workload-identity` accepts a Kubernetes YAML bundle containing any mix of
+`ServiceAccount`, `Pod`, `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, and
+`CronJob` resources. The loader merges service-account annotations with
+pod-template annotations, extracts env var names plus projected service account
+token settings, and then runs the single-workload plus cross-workload identity
+checks before rendering a CI-friendly exit code.
 
 ---
 

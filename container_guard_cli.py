@@ -20,11 +20,13 @@ from pathlib import Path
 from typing import Any
 
 import click
+import yaml
 from rich import box
 from rich.console import Console
 from rich.table import Table
 
 from docker.layer_scanner import LayerFile, LayerMetadata, LayerScanner
+from kubernetes.workload_identity_checker import check_many, load_configs_from_file
 from validators.dockerfile_validator import Severity as DSeverity
 from validators.dockerfile_validator import validate_dockerfile
 from validators.helm_scanner import Severity as HSeverity
@@ -123,6 +125,18 @@ def _load_layer_report(path: Path, image_tag: str, max_layers: int, max_layer_mb
 
     scanner = LayerScanner(max_layers=max_layers, max_layer_bytes=max_layer_mb * 1024 * 1024)
     return scanner.scan(layers, image_tag=resolved_image_tag)
+
+
+def _load_workload_identity_results(path: Path):
+    try:
+        configs = load_configs_from_file(path)
+    except yaml.YAMLError as exc:
+        raise click.ClickException(f"Unable to parse Kubernetes YAML: {exc}") from exc
+
+    if not configs:
+        raise click.ClickException("No supported Kubernetes workloads found in the provided YAML.")
+
+    return check_many(configs)
 
 
 @cli.command("validate-manifest")
@@ -319,6 +333,52 @@ def scan_image_layers_cmd(path: Path, image_tag: str, max_layers: int, max_layer
     console.print(f"\nSummary: {report.summary()}", markup=False)
 
     if _has_blocking_findings(report.findings):
+        console.print("[bold red]Exiting 1 — HIGH or CRITICAL findings detected.[/bold red]")
+        sys.exit(1)
+
+
+@cli.command("scan-workload-identity")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def scan_workload_identity_cmd(path: Path) -> None:
+    """Scan Kubernetes workloads in PATH for cloud workload identity misconfigurations."""
+    results = _load_workload_identity_results(path)
+    findings = [finding for result in results for finding in result.findings]
+
+    if not findings:
+        _print_success(path, noun="workload identity manifest")
+        console.print(f"Summary: analyzed {len(results)} workload(s) with no findings.", markup=False)
+        sys.exit(0)
+
+    _render_findings_table(
+        f"Workload identity findings: {path}",
+        [
+            ("Severity", "bold"),
+            ("Rule ID", None),
+            ("Workload", None),
+            ("Namespace", "dim"),
+            ("Title", None),
+            ("Detail", None),
+        ],
+        [
+            [
+                f"[{_SEVERITY_STYLE.get(finding.severity, 'white')}]{finding.severity}[/{_SEVERITY_STYLE.get(finding.severity, 'white')}]",
+                finding.check_id,
+                f"{result.workload_kind}/{result.workload_name}",
+                result.namespace,
+                finding.title,
+                finding.detail,
+            ]
+            for result in results
+            for finding in result.findings
+        ],
+    )
+    total_risk = max(result.risk_score for result in results)
+    console.print(
+        f"\n[bold]Total findings:[/bold] {len(findings)} "
+        f"across {len(results)} workload(s); highest workload risk score={total_risk}/100"
+    )
+
+    if any(finding.severity in {"HIGH", "CRITICAL"} for finding in findings):
         console.print("[bold red]Exiting 1 — HIGH or CRITICAL findings detected.[/bold red]")
         sys.exit(1)
 

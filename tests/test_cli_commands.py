@@ -124,3 +124,84 @@ def test_scan_image_layers_succeeds_for_clean_payload(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "LayerScanReport [clean:1.0.0]" in result.output
+
+
+def test_scan_workload_identity_reports_high_findings(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "workloads.yaml"
+    manifest_path.write_text(
+        textwrap.dedent(
+            """
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: api
+              namespace: prod
+            spec:
+              template:
+                spec:
+                  serviceAccountName: default
+                  containers:
+                    - name: api
+                      image: example/api:1.0.0
+                      env:
+                        - name: AWS_ROLE_ARN
+                          value: arn:aws:iam::123456789:role/AdminRole
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["scan-workload-identity", str(manifest_path)])
+
+    assert result.exit_code == 1
+    assert "WID-001" in result.output
+    assert "WID-004" in result.output
+
+
+def test_scan_workload_identity_succeeds_for_scoped_projected_tokens(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "workloads.yaml"
+    manifest_path.write_text(
+        textwrap.dedent(
+            """
+            apiVersion: v1
+            kind: ServiceAccount
+            metadata:
+              name: api-sa
+              namespace: prod
+              annotations:
+                eks.amazonaws.com/role-arn: arn:aws:iam::123456789:role/payments-reader
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: api
+              namespace: prod
+            spec:
+              template:
+                metadata:
+                  annotations:
+                    team: platform
+                spec:
+                  serviceAccountName: api-sa
+                  containers:
+                    - name: api
+                      image: example/api:1.0.0
+                      env:
+                        - name: AWS_ROLE_ARN
+                          value: arn:aws:iam::123456789:role/payments-reader
+                  volumes:
+                    - name: identity-token
+                      projected:
+                        sources:
+                          - serviceAccountToken:
+                              audience: sts.amazonaws.com
+                              expirationSeconds: 3600
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["scan-workload-identity", str(manifest_path)])
+
+    assert result.exit_code == 0
+    assert "analyzed 1 workload(s) with no findings" in result.output

@@ -12,7 +12,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional
+
+import yaml
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -67,6 +70,10 @@ _CHECK_SEVERITIES: Dict[str, str] = {
     "WID-006": "MEDIUM",
     "WID-007": "MEDIUM",
 }
+
+_SUPPORTED_WORKLOAD_KINDS: frozenset[str] = frozenset(
+    {"Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"}
+)
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -190,6 +197,117 @@ def _compute_risk_score(findings: List[WIDFinding]) -> int:
             seen.add(f.check_id)
             total += f.weight
     return min(_MAX_RISK_SCORE, total)
+
+
+def _extract_pod_metadata_and_spec(manifest: dict) -> tuple[dict, dict]:
+    """Return pod-template metadata/spec for supported workload kinds."""
+    kind = manifest.get("kind", "")
+    spec = manifest.get("spec") or {}
+    if kind == "Pod":
+        return manifest.get("metadata") or {}, spec
+    if kind == "CronJob":
+        template = ((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}
+    else:
+        template = spec.get("template") or {}
+    return template.get("metadata") or {}, template.get("spec") or {}
+
+
+def _collect_env_var_names(pod_spec: dict) -> List[str]:
+    """Collect env var names across init and app containers."""
+    env_var_names: List[str] = []
+    for group_name in ("initContainers", "containers"):
+        for container in pod_spec.get(group_name) or []:
+            if not isinstance(container, dict):
+                continue
+            for env_item in container.get("env") or []:
+                if isinstance(env_item, dict) and env_item.get("name"):
+                    env_var_names.append(str(env_item["name"]))
+    return env_var_names
+
+
+def _collect_projected_token_settings(pod_spec: dict) -> tuple[List[str], Optional[int]]:
+    """Collect projected ServiceAccountToken audiences and max expiry."""
+    audiences: List[str] = []
+    expiry_seconds: List[int] = []
+    for volume in pod_spec.get("volumes") or []:
+        if not isinstance(volume, dict):
+            continue
+        projected = volume.get("projected")
+        if not isinstance(projected, dict):
+            continue
+        for source in projected.get("sources") or []:
+            if not isinstance(source, dict):
+                continue
+            token = source.get("serviceAccountToken")
+            if not isinstance(token, dict):
+                continue
+            audience = token.get("audience")
+            if audience is not None:
+                audiences.append(str(audience))
+            expiry = token.get("expirationSeconds")
+            if expiry is not None:
+                expiry_seconds.append(int(expiry))
+    max_expiry = max(expiry_seconds) if expiry_seconds else None
+    return audiences, max_expiry
+
+
+def load_configs_from_manifests(manifests: List[dict]) -> List[WorkloadIdentityConfig]:
+    """Build WorkloadIdentityConfig objects from Kubernetes YAML documents."""
+    service_accounts: Dict[tuple[str, str], Dict[str, str]] = {}
+    for manifest in manifests:
+        if not isinstance(manifest, dict) or manifest.get("kind") != "ServiceAccount":
+            continue
+        metadata = manifest.get("metadata") or {}
+        namespace = str(metadata.get("namespace") or "default")
+        name = str(metadata.get("name") or "default")
+        annotations = {
+            str(key): str(value)
+            for key, value in (metadata.get("annotations") or {}).items()
+        }
+        service_accounts[(namespace, name)] = annotations
+
+    configs: List[WorkloadIdentityConfig] = []
+    for manifest in manifests:
+        if not isinstance(manifest, dict):
+            continue
+        kind = manifest.get("kind", "")
+        if kind not in _SUPPORTED_WORKLOAD_KINDS:
+            continue
+
+        metadata = manifest.get("metadata") or {}
+        pod_metadata, pod_spec = _extract_pod_metadata_and_spec(manifest)
+        namespace = str(metadata.get("namespace") or "default")
+        service_account = str(pod_spec.get("serviceAccountName") or "default")
+        annotations: Dict[str, str] = {}
+        annotations.update(service_accounts.get((namespace, service_account), {}))
+        annotations.update(
+            {
+                str(key): str(value)
+                for key, value in (pod_metadata.get("annotations") or {}).items()
+            }
+        )
+        audiences, expiry = _collect_projected_token_settings(pod_spec)
+
+        configs.append(
+            WorkloadIdentityConfig(
+                workload_name=str(metadata.get("name") or "unnamed"),
+                workload_kind=str(kind),
+                namespace=namespace,
+                service_account=service_account,
+                annotations=annotations,
+                env_var_names=_collect_env_var_names(pod_spec),
+                projected_token_audiences=audiences,
+                projected_token_expiry_seconds=expiry,
+            )
+        )
+    return configs
+
+
+def load_configs_from_file(path: Path) -> List[WorkloadIdentityConfig]:
+    """Load a multi-document Kubernetes YAML file into workload identity configs."""
+    with path.open("r", encoding="utf-8") as handle:
+        manifests = [doc for doc in yaml.safe_load_all(handle) if isinstance(doc, dict)]
+    return load_configs_from_manifests(manifests)
 
 
 # ---------------------------------------------------------------------------

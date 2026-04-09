@@ -6,8 +6,10 @@
 #
 # Run with: python -m pytest tests/test_workload_identity_checker.py -q
 
-import sys
 import os
+import sys
+import textwrap
+from pathlib import Path
 
 # Ensure the project root is on the path so the kubernetes package is importable.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -18,6 +20,8 @@ from kubernetes.workload_identity_checker import (
     WIDResult,
     check,
     check_many,
+    load_configs_from_file,
+    load_configs_from_manifests,
     _CHECK_WEIGHTS,
     _CHECK_SEVERITIES,
     _CLOUD_ENV_VARS,
@@ -262,6 +266,118 @@ def test_wid002_detail_contains_role_arn():
     r = check(_cfg(annotations={"eks.amazonaws.com/role-arn": arn}))
     finding = next(f for f in r.findings if f.check_id == "WID-002")
     assert arn in finding.detail
+
+
+def test_load_configs_from_manifests_merges_service_account_annotations():
+    manifests = [
+        {
+            "apiVersion": "v1",
+            "kind": "ServiceAccount",
+            "metadata": {
+                "name": "api-sa",
+                "namespace": "prod",
+                "annotations": {"eks.amazonaws.com/role-arn": "arn:aws:iam::123456789:role/payments-reader"},
+            },
+        },
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {"name": "payments", "namespace": "prod"},
+            "spec": {
+                "template": {
+                    "metadata": {"annotations": {"team": "platform"}},
+                    "spec": {
+                        "serviceAccountName": "api-sa",
+                        "containers": [
+                            {
+                                "name": "api",
+                                "image": "example/api:1.0.0",
+                                "env": [{"name": "AWS_ROLE_ARN", "value": "arn:aws:iam::123456789:role/payments-reader"}],
+                            }
+                        ],
+                        "volumes": [
+                            {
+                                "name": "token",
+                                "projected": {
+                                    "sources": [
+                                        {
+                                            "serviceAccountToken": {
+                                                "audience": "sts.amazonaws.com",
+                                                "expirationSeconds": 3600,
+                                            }
+                                        }
+                                    ]
+                                },
+                            }
+                        ],
+                    },
+                }
+            },
+        },
+    ]
+
+    configs = load_configs_from_manifests(manifests)
+
+    assert len(configs) == 1
+    config = configs[0]
+    assert config.service_account == "api-sa"
+    assert config.annotations["eks.amazonaws.com/role-arn"] == "arn:aws:iam::123456789:role/payments-reader"
+    assert config.annotations["team"] == "platform"
+    assert config.projected_token_audiences == ["sts.amazonaws.com"]
+    assert config.projected_token_expiry_seconds == 3600
+
+
+def test_load_configs_from_file_supports_cronjob_and_cross_workload_sharing(tmp_path: Path):
+    manifest_path = tmp_path / "workloads.yaml"
+    manifest_path.write_text(
+        textwrap.dedent(
+            """
+            apiVersion: v1
+            kind: ServiceAccount
+            metadata:
+              name: shared-sa
+              namespace: prod
+              annotations:
+                iam.gke.io/gcp-service-account: shared@project.iam.gserviceaccount.com
+            ---
+            apiVersion: batch/v1
+            kind: CronJob
+            metadata:
+              name: nightly-sync
+              namespace: prod
+            spec:
+              schedule: "0 * * * *"
+              jobTemplate:
+                spec:
+                  template:
+                    spec:
+                      serviceAccountName: shared-sa
+                      containers:
+                        - name: sync
+                          image: example/sync:1.0.0
+                      restartPolicy: OnFailure
+            ---
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: adhoc-sync
+              namespace: prod
+            spec:
+              serviceAccountName: shared-sa
+              containers:
+                - name: sync
+                  image: example/sync:1.0.0
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    configs = load_configs_from_file(manifest_path)
+    results = check_many(configs)
+
+    assert len(configs) == 2
+    assert {config.workload_kind for config in configs} == {"CronJob", "Pod"}
+    assert all("WID-006" in _ids(result) for result in results)
 
 
 # ===========================================================================
