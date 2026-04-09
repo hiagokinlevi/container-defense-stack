@@ -1,0 +1,91 @@
+---
+# Secure Kubernetes Deployment manifest
+# Demonstrates production-grade security context, resource governance,
+# and health probes. Replace placeholder values (app name, image, ports)
+# before deploying.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secure-app
+  namespace: default
+  labels:
+    app: secure-app
+    version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: secure-app
+  template:
+    metadata:
+      labels:
+        app: secure-app
+        version: "1.0.0"
+    spec:
+      # Pod-level security context applies to all containers in the pod.
+      securityContext:
+        runAsNonRoot: true       # Reject the pod if the container would run as UID 0.
+        runAsUser: 10001         # Explicit UID — matches the USER in the Dockerfile.
+        fsGroup: 10001           # Files written to mounted volumes get this GID.
+        seccompProfile:
+          type: RuntimeDefault   # Apply the container runtime's default seccomp profile.
+
+      # Do not mount the service-account token unless the pod actually calls the K8s API.
+      automountServiceAccountToken: false
+
+      containers:
+        - name: secure-app
+          image: ghcr.io/hiagokinlevi/secure-app:1.0.0   # Pin to a specific digest in production.
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          # Container-level security context overrides or supplements the pod-level one.
+          securityContext:
+            allowPrivilegeEscalation: false  # Prevent sudo / setuid escalation inside the container.
+            readOnlyRootFilesystem: true      # Immutable root; write to emptyDir volumes only.
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop:
+                - ALL                         # Drop every Linux capability; add back only what is needed.
+
+          # Resource requests ensure the scheduler places the pod on a node with capacity.
+          # Limits cap usage to protect neighbouring workloads.
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+
+          # Liveness probe restarts the container if the app becomes unresponsive.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+
+          # Readiness probe removes the pod from Service endpoints while it is not ready.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+
+          # Writable scratch space for temp files; the root filesystem is read-only.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}

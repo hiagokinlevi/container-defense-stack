@@ -1,0 +1,56 @@
+---
+# Minimum-privilege RBAC set
+# Principle: grant only the exact verbs and resources the workload needs.
+# This set gives read-only access to a specific list of pods and configmaps.
+# Replace <namespace> and resource names with your actual values.
+
+# 1. ServiceAccount — dedicated identity for the workload.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: secure-app-sa
+  namespace: default
+  labels:
+    app: secure-app
+automountServiceAccountToken: false  # Mount the token only in pods that explicitly request it.
+
+---
+# 2. Role — namespace-scoped permission set.
+#    Only allows get/list on named resources; no write access, no cluster-wide access.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: secure-app-role
+  namespace: default
+  labels:
+    app: secure-app
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    # Restrict to specific pod names to follow least-privilege further.
+    resourceNames: ["secure-app-0", "secure-app-1"]
+    verbs: ["get", "list"]
+
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    # Only allow reading the specific ConfigMap this app depends on.
+    resourceNames: ["secure-app-config"]
+    verbs: ["get", "list"]
+
+---
+# 3. RoleBinding — binds the Role to the ServiceAccount within the namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: secure-app-rolebinding
+  namespace: default
+  labels:
+    app: secure-app
+subjects:
+  - kind: ServiceAccount
+    name: secure-app-sa
+    namespace: default
+roleRef:
+  kind: Role
+  name: secure-app-role
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,74 @@
+---
+# Secure Kubernetes Job manifest
+# Suitable for batch / one-shot workloads.
+# completionMode: NonIndexed — all pods are treated as equivalent (no index env var).
+# restartPolicy: Never       — failed pods are not restarted; backoffLimit controls retries.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: secure-batch-job
+  namespace: default
+  labels:
+    app: secure-batch-job
+spec:
+  completions: 1
+  completionMode: NonIndexed  # Standard mode; use Indexed for parallel jobs with identity.
+  parallelism: 1              # One pod at a time.
+  backoffLimit: 3             # Retry up to 3 times before marking the Job as failed.
+  ttlSecondsAfterFinished: 300  # Auto-delete the Job 5 minutes after it completes.
+
+  template:
+    metadata:
+      labels:
+        app: secure-batch-job
+    spec:
+      # Pod will not be restarted after completion or failure.
+      restartPolicy: Never
+
+      # Pod-level security context — mirrors the Deployment pattern.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+
+      # No K8s API access needed for a typical batch job.
+      automountServiceAccountToken: false
+
+      containers:
+        - name: batch-worker
+          image: ghcr.io/hiagokinlevi/batch-worker:1.0.0
+          imagePullPolicy: Always
+
+          command: ["python", "-m", "worker", "--run-once"]
+
+          # Container-level security context.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop:
+                - ALL
+
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: output
+              mountPath: /output
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: output
+          emptyDir: {}

@@ -1,0 +1,31 @@
+---
+# Allow-internal NetworkPolicy
+# Permits ingress traffic only from pods labelled app: trusted-service
+# within the same namespace. All other ingress remains denied by default-deny-all.
+# Egress is not opened here — add a companion policy if the pod needs outbound access.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-trusted-service
+  namespace: default   # Must match the namespace of the pods being protected.
+  labels:
+    policy-type: allow-internal
+spec:
+  # Target: pods with the label app: secure-app receive the allow rule.
+  podSelector:
+    matchLabels:
+      app: secure-app
+
+  policyTypes:
+    - Ingress
+
+  ingress:
+    - from:
+        # Only pods with this label in the same namespace may send traffic.
+        - podSelector:
+            matchLabels:
+              app: trusted-service
+      # Restrict to the application port; omit ports[] to allow all ports.
+      ports:
+        - protocol: TCP
+          port: 8080

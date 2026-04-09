@@ -1,0 +1,42 @@
+---
+# Pod Security Admission (PSA) — namespace labels
+#
+# PodSecurityPolicy (PSP) was removed in Kubernetes 1.25.
+# The replacement is the built-in Pod Security Admission controller, enabled
+# by default from Kubernetes 1.23 (GA in 1.25).
+#
+# How it works:
+#   Labels on a Namespace control the enforcement level for pods scheduled
+#   into that namespace. Three profiles are available:
+#
+#   privileged — No restrictions. Avoid for production workloads.
+#   baseline   — Prevents known privilege-escalation vectors (e.g., hostPID,
+#                hostNetwork, privileged containers) while remaining broadly
+#                compatible with containerised applications.
+#   restricted — Enforces current hardening best practices: non-root user,
+#                no privilege escalation, seccomp RuntimeDefault or Localhost.
+#
+# Three modes per profile:
+#   enforce — Reject pods that violate the policy.
+#   audit   — Allow pods but record a violation in the audit log.
+#   warn    — Allow pods but send a warning to the API client.
+#
+# Recommendation: start with warn+audit to measure impact, then switch to enforce.
+#
+# Reference: https://kubernetes.io/docs/concepts/security/pod-security-admission/
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: secure-workloads   # Replace with your target namespace name.
+  labels:
+    # Enforce the baseline profile: pods violating it are rejected at admission.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: v1.27
+
+    # Also audit and warn at the restricted level to surface opportunities
+    # to tighten policy without immediately breaking workloads.
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.27
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.27
