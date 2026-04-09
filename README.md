@@ -47,6 +47,15 @@ k1n-container-guard validate-manifest deployment.yaml
 
 # Validate a Dockerfile
 k1n-container-guard validate-dockerfile Dockerfile
+
+# Scan a Helm values file
+k1n-container-guard scan-helm-values charts/api/values.yaml --chart-name api
+
+# Scan an entire Helm chart directory
+k1n-container-guard scan-helm-chart charts/api
+
+# Scan OCI/Docker layer metadata exported as JSON
+k1n-container-guard scan-image-layers image-layers.json --image-tag ghcr.io/acme/api:1.2.3
 ```
 
 If you are working in an offline or PEP 668-managed environment, create the
@@ -87,6 +96,22 @@ kubectl apply -f kubernetes/admission/mutating-webhook-stack.yaml
 
 Label target namespaces with `admission.k1n.dev/enforce=true` before enabling
 either webhook template so enforcement is opt-in until you complete validation.
+
+## Extended Scanners
+
+- `scan-helm-values` checks Helm values files for pinned image tags, secure
+  security context defaults, bounded resources, service account token settings,
+  network exposure, and hardcoded credentials.
+- `scan-helm-chart` evaluates the full chart root, combining `values.yaml`
+  checks with template scanning for literal secrets in `templates/*.yaml`.
+- `scan-image-layers` evaluates Docker/OCI layer metadata in JSON form so CI
+  jobs can flag risky build history, oversized layers, remote fetches without
+  checksum verification, and SUID/SGID binaries before release.
+
+The `scan-image-layers` command accepts either a raw JSON list of layer objects
+or an object with `image_tag` and `layers` keys. Each layer supports
+`layer_id`, `created_by`, `size_bytes`, `layer_index`, and an optional `files`
+list containing `path`, `mode`, and `size`.
 
 ## License
 

@@ -4,6 +4,9 @@ container-defense-stack CLI
 Entry points:
   validate-manifest PATH   — Validate a Kubernetes YAML manifest for security issues.
   validate-dockerfile PATH — Validate a Dockerfile for security issues.
+  scan-helm-values PATH    — Scan a Helm values file for security issues.
+  scan-helm-chart PATH     — Scan a Helm chart directory for security issues.
+  scan-image-layers PATH   — Scan Docker/OCI layer metadata from a JSON file.
 
 Exit codes:
   0 — No HIGH or CRITICAL findings.
@@ -11,16 +14,21 @@ Exit codes:
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 from rich import box
 from rich.console import Console
 from rich.table import Table
 
+from docker.layer_scanner import LayerFile, LayerMetadata, LayerScanner
 from validators.dockerfile_validator import Severity as DSeverity
 from validators.dockerfile_validator import validate_dockerfile
+from validators.helm_scanner import Severity as HSeverity
+from validators.helm_scanner import scan_chart, scan_values_file
 from validators.manifest_validator import Severity as MSeverity
 from validators.manifest_validator import validate_manifest
 
@@ -40,6 +48,83 @@ def cli() -> None:
     """k1n container defense stack — security posture validation toolkit."""
 
 
+def _print_success(path: Path, noun: str = "file") -> None:
+    console.print(f"[bold green]No findings — {noun} {path} passed.[/bold green]")
+
+
+def _render_findings_table(title: str, columns: list[tuple[str, str | None]], rows: list[list[str]]) -> None:
+    table = Table(title=title, box=box.ROUNDED, show_lines=True)
+    for column_name, style in columns:
+        kwargs: dict[str, Any] = {"no_wrap": column_name in {"Severity", "Rule ID", "Line", "Layer"}}
+        if style:
+            kwargs["style"] = style
+        table.add_column(column_name, **kwargs)
+
+    for row in rows:
+        table.add_row(*row)
+
+    console.print(table)
+
+
+def _has_blocking_findings(findings: list[Any]) -> bool:
+    return any(getattr(finding, "severity").value in {"HIGH", "CRITICAL"} for finding in findings)
+
+
+def _load_layer_report(path: Path, image_tag: str, max_layers: int, max_layer_mb: int):
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    if isinstance(payload, list):
+        layer_items = payload
+        resolved_image_tag = image_tag
+    elif isinstance(payload, dict):
+        layer_items = payload.get("layers", [])
+        resolved_image_tag = image_tag or str(payload.get("image_tag", ""))
+    else:
+        raise click.ClickException("Layer metadata JSON must be either a list or an object with a 'layers' key.")
+
+    if not isinstance(layer_items, list):
+        raise click.ClickException("The 'layers' value must be a list of layer objects.")
+
+    layers: list[LayerMetadata] = []
+    for index, item in enumerate(layer_items):
+        if not isinstance(item, dict):
+            raise click.ClickException(f"Layer entry {index} is not a JSON object.")
+
+        files_payload = item.get("files", [])
+        if not isinstance(files_payload, list):
+            raise click.ClickException(f"Layer entry {index} has a non-list 'files' value.")
+
+        files: list[LayerFile] = []
+        for file_index, file_item in enumerate(files_payload):
+            if not isinstance(file_item, dict):
+                raise click.ClickException(f"Layer entry {index} file {file_index} is not a JSON object.")
+
+            raw_mode = file_item.get("mode", 0o644)
+            if isinstance(raw_mode, str):
+                raw_mode = int(raw_mode, 8)
+
+            files.append(
+                LayerFile(
+                    path=str(file_item.get("path", "")),
+                    mode=int(raw_mode),
+                    size=int(file_item.get("size", 0)),
+                )
+            )
+
+        layers.append(
+            LayerMetadata(
+                layer_id=str(item.get("layer_id", "")),
+                created_by=str(item.get("created_by", "")),
+                size_bytes=int(item.get("size_bytes", 0)),
+                files=files,
+                layer_index=int(item.get("layer_index", index)),
+            )
+        )
+
+    scanner = LayerScanner(max_layers=max_layers, max_layer_bytes=max_layer_mb * 1024 * 1024)
+    return scanner.scan(layers, image_tag=resolved_image_tag)
+
+
 @cli.command("validate-manifest")
 @click.argument("path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 def validate_manifest_cmd(path: Path) -> None:
@@ -47,33 +132,32 @@ def validate_manifest_cmd(path: Path) -> None:
     findings = validate_manifest(path)
 
     if not findings:
-        console.print(f"[bold green]No findings — {path} is secure.[/bold green]")
+        _print_success(path)
         sys.exit(0)
 
-    table = Table(title=f"Findings: {path}", box=box.ROUNDED, show_lines=True)
-    table.add_column("Severity", style="bold", no_wrap=True)
-    table.add_column("Rule ID", no_wrap=True)
-    table.add_column("Message")
-    table.add_column("Path", style="dim")
-    table.add_column("Remediation")
-
-    high_or_critical = False
-    for finding in findings:
-        style = _SEVERITY_STYLE.get(finding.severity.value, "white")
-        table.add_row(
-            f"[{style}]{finding.severity.value}[/{style}]",
-            finding.rule_id,
-            finding.message,
-            finding.path,
-            finding.remediation,
-        )
-        if finding.severity in (MSeverity.HIGH, MSeverity.CRITICAL):
-            high_or_critical = True
-
-    console.print(table)
+    _render_findings_table(
+        f"Findings: {path}",
+        [
+            ("Severity", "bold"),
+            ("Rule ID", None),
+            ("Message", None),
+            ("Path", "dim"),
+            ("Remediation", None),
+        ],
+        [
+            [
+                f"[{_SEVERITY_STYLE.get(f.severity.value, 'white')}]{f.severity.value}[/{_SEVERITY_STYLE.get(f.severity.value, 'white')}]",
+                f.rule_id,
+                f.message,
+                f.path,
+                f.remediation,
+            ]
+            for f in findings
+        ],
+    )
     console.print(f"\n[bold]Total findings:[/bold] {len(findings)}")
 
-    if high_or_critical:
+    if any(f.severity in (MSeverity.HIGH, MSeverity.CRITICAL) for f in findings):
         console.print("[bold red]Exiting 1 — HIGH or CRITICAL findings detected.[/bold red]")
         sys.exit(1)
 
@@ -85,35 +169,157 @@ def validate_dockerfile_cmd(path: Path) -> None:
     findings = validate_dockerfile(path)
 
     if not findings:
-        console.print(f"[bold green]No findings — {path} is secure.[/bold green]")
+        _print_success(path)
         sys.exit(0)
 
-    table = Table(title=f"Findings: {path}", box=box.ROUNDED, show_lines=True)
-    table.add_column("Severity", style="bold", no_wrap=True)
-    table.add_column("Rule ID", no_wrap=True)
-    table.add_column("Line", no_wrap=True)
-    table.add_column("Message")
-    table.add_column("Remediation")
-
-    high_or_critical = False
-    for finding in findings:
-        style = _SEVERITY_STYLE.get(finding.severity.value, "white")
-        line_str = str(finding.line) if finding.line > 0 else "—"
-        table.add_row(
-            f"[{style}]{finding.severity.value}[/{style}]",
-            finding.rule_id,
-            line_str,
-            finding.message,
-            finding.remediation,
-        )
-        if finding.severity == DSeverity.HIGH:
-            high_or_critical = True
-
-    console.print(table)
+    _render_findings_table(
+        f"Findings: {path}",
+        [
+            ("Severity", "bold"),
+            ("Rule ID", None),
+            ("Line", None),
+            ("Message", None),
+            ("Remediation", None),
+        ],
+        [
+            [
+                f"[{_SEVERITY_STYLE.get(f.severity.value, 'white')}]{f.severity.value}[/{_SEVERITY_STYLE.get(f.severity.value, 'white')}]",
+                f.rule_id,
+                str(f.line) if f.line > 0 else "—",
+                f.message,
+                f.remediation,
+            ]
+            for f in findings
+        ],
+    )
     console.print(f"\n[bold]Total findings:[/bold] {len(findings)}")
 
-    if high_or_critical:
+    if any(f.severity == DSeverity.HIGH for f in findings):
         console.print("[bold red]Exiting 1 — HIGH findings detected.[/bold red]")
+        sys.exit(1)
+
+
+@cli.command("scan-helm-values")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--chart-name", default="unknown", show_default=True, help="Chart name label to use in the report.")
+def scan_helm_values_cmd(path: Path, chart_name: str) -> None:
+    """Scan a Helm values file at PATH for security misconfigurations."""
+    result = scan_values_file(path, chart_name=chart_name)
+
+    if not result.findings:
+        _print_success(path, noun="values file")
+        sys.exit(0)
+
+    _render_findings_table(
+        f"Helm findings: {path}",
+        [
+            ("Severity", "bold"),
+            ("Rule ID", None),
+            ("Location", "dim"),
+            ("Message", None),
+            ("Remediation", None),
+        ],
+        [
+            [
+                f"[{_SEVERITY_STYLE.get(f.severity.value, 'white')}]{f.severity.value}[/{_SEVERITY_STYLE.get(f.severity.value, 'white')}]",
+                f.rule_id,
+                f.location,
+                f.message,
+                f.remediation,
+            ]
+            for f in result.findings
+        ],
+    )
+    console.print(
+        f"\n[bold]Total findings:[/bold] {len(result.findings)} "
+        f"(critical={result.critical_count}, high={result.high_count})"
+    )
+
+    if any(f.severity in (HSeverity.HIGH, HSeverity.CRITICAL) for f in result.findings):
+        console.print("[bold red]Exiting 1 — HIGH or CRITICAL findings detected.[/bold red]")
+        sys.exit(1)
+
+
+@cli.command("scan-helm-chart")
+@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
+def scan_helm_chart_cmd(path: Path) -> None:
+    """Scan a Helm chart directory rooted at PATH for security misconfigurations."""
+    result = scan_chart(path)
+
+    if not result.findings:
+        _print_success(path, noun="chart")
+        sys.exit(0)
+
+    _render_findings_table(
+        f"Helm findings: {path}",
+        [
+            ("Severity", "bold"),
+            ("Rule ID", None),
+            ("Location", "dim"),
+            ("Message", None),
+            ("Remediation", None),
+        ],
+        [
+            [
+                f"[{_SEVERITY_STYLE.get(f.severity.value, 'white')}]{f.severity.value}[/{_SEVERITY_STYLE.get(f.severity.value, 'white')}]",
+                f.rule_id,
+                f.location,
+                f.message,
+                f.remediation,
+            ]
+            for f in result.findings
+        ],
+    )
+    console.print(
+        f"\n[bold]Total findings:[/bold] {len(result.findings)} "
+        f"(critical={result.critical_count}, high={result.high_count})"
+    )
+
+    if any(f.severity in (HSeverity.HIGH, HSeverity.CRITICAL) for f in result.findings):
+        console.print("[bold red]Exiting 1 — HIGH or CRITICAL findings detected.[/bold red]")
+        sys.exit(1)
+
+
+@cli.command("scan-image-layers")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--image-tag", default="", help="Optional image tag label shown in the report.")
+@click.option("--max-layers", default=20, show_default=True, type=int, help="Maximum recommended layer count before LAY-005 triggers.")
+@click.option("--max-layer-mb", default=500, show_default=True, type=int, help="Maximum recommended size for one image layer in MB.")
+def scan_image_layers_cmd(path: Path, image_tag: str, max_layers: int, max_layer_mb: int) -> None:
+    """Scan Docker/OCI image layer metadata from a JSON file."""
+    report = _load_layer_report(path, image_tag=image_tag, max_layers=max_layers, max_layer_mb=max_layer_mb)
+
+    if not report.findings:
+        _print_success(path, noun="layer metadata")
+        console.print(f"Summary: {report.summary()}", markup=False)
+        sys.exit(0)
+
+    _render_findings_table(
+        f"Layer findings: {path}",
+        [
+            ("Severity", "bold"),
+            ("Rule ID", None),
+            ("Layer", None),
+            ("Title", None),
+            ("Evidence", "dim"),
+            ("Remediation", None),
+        ],
+        [
+            [
+                f"[{_SEVERITY_STYLE.get(f.severity.value, 'white')}]{f.severity.value}[/{_SEVERITY_STYLE.get(f.severity.value, 'white')}]",
+                f.check_id,
+                str(f.layer_index),
+                f.title,
+                f.evidence or "—",
+                f.remediation,
+            ]
+            for f in report.findings
+        ],
+    )
+    console.print(f"\nSummary: {report.summary()}", markup=False)
+
+    if _has_blocking_findings(report.findings):
+        console.print("[bold red]Exiting 1 — HIGH or CRITICAL findings detected.[/bold red]")
         sys.exit(1)
 
 

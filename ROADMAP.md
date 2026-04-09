@@ -10,8 +10,8 @@
 - [x] Multi-stage Dockerfiles (Python, Go)
 
 ## v0.2 — Helm & OCI
-- [ ] Helm chart values scanner
-- [ ] OCI image layer inspection
+- [x] Helm chart values scanner
+- [x] OCI image layer inspection
 - [x] Distroless base image recommendations
 
 ## v0.3 — Admission Webhook

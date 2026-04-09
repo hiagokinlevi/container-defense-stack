@@ -2,8 +2,9 @@
 
 This document describes the design of the repository's static validation and
 admission policy layers: `manifest_validator` for Kubernetes YAML manifests,
-`dockerfile_validator` for Dockerfiles, and the reusable OPA/Gatekeeper/Kyverno
-policy library under `policies/`.
+`dockerfile_validator` for Dockerfiles, `helm_scanner` for Helm values/chart
+hardening, `layer_scanner` for OCI image layer metadata review, and the
+reusable OPA/Gatekeeper/Kyverno policy library under `policies/`.
 
 ---
 
@@ -31,6 +32,10 @@ CLI layer (Click + Rich table)
 
 No network calls, no subprocess invocations, no cluster access — the validators
 are purely static analysis tools that run offline.
+
+The Helm and layer scanners follow the same offline model. They parse local YAML
+or JSON artifacts and emit structured findings without pulling images, talking
+to clusters, or invoking Helm/Docker CLIs.
 
 The admission policies use the same control intent, but package it for cluster
 enforcement with Gatekeeper `ConstraintTemplate` / `Constraint` manifests and
@@ -121,6 +126,14 @@ Both use `@dataclass` for zero-boilerplate construction, equality comparison, an
 repr. The `Severity` enums inherit from `str` so they serialise naturally to JSON
 without a custom encoder.
 
+### HelmFinding / LayerFinding
+
+`helm_scanner` emits `HelmFinding` objects keyed by rule IDs such as
+`HELM001` and `HELM014`, while `layer_scanner` emits `LayerFinding` objects
+keyed by `LAY-001` through `LAY-007`. Both keep the same design goals as the
+manifest and Dockerfile validators: explicit rule IDs, human-readable
+remediation guidance, and deterministic serialisable results for CI pipelines.
+
 ---
 
 ## CLI Interface
@@ -130,6 +143,9 @@ without a custom encoder.
 ```
 cli validate-manifest  PATH
 cli validate-dockerfile PATH
+cli scan-helm-values  PATH [--chart-name NAME]
+cli scan-helm-chart   PATH
+cli scan-image-layers PATH [--image-tag TAG]
 ```
 
 Both commands:
@@ -142,6 +158,10 @@ Both commands:
 The CLI is intentionally thin — it contains no business logic, only presentation
 and exit-code logic. This makes the validators easy to use as a library without
 importing Click or Rich.
+
+`scan-image-layers` accepts a JSON list of layer metadata objects or an object
+with top-level `image_tag` and `layers` keys, making it easy to feed exported
+metadata from a CI step into the scanner without shelling out from the tool.
 
 ---
 
