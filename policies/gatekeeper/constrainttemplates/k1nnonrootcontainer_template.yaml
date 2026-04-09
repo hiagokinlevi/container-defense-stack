@@ -1,0 +1,33 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k1nnonrootcontainer
+spec:
+  crd:
+    spec:
+      names:
+        kind: K1nNonRootContainer
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k1nnonrootcontainer
+
+        violation[{"msg": msg}] {
+          input.review.kind.kind == "Pod"
+          container := input.review.object.spec.containers[_]
+          not container.securityContext.runAsNonRoot == true
+          msg := sprintf(
+            "HIGH [SEC004]: Container '%v' does not enforce non-root execution. Set securityContext.runAsNonRoot: true.",
+            [container.name],
+          )
+        }
+
+        violation[{"msg": msg}] {
+          input.review.kind.kind == "Pod"
+          container := input.review.object.spec.containers[_]
+          container.securityContext.runAsUser == 0
+          msg := sprintf(
+            "HIGH [SEC004]: Container '%v' explicitly runs as UID 0 (root). Choose a non-zero runAsUser.",
+            [container.name],
+          )
+        }

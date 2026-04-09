@@ -1,0 +1,33 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k1nresourcelimits
+spec:
+  crd:
+    spec:
+      names:
+        kind: K1nResourceLimits
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k1nresourcelimits
+
+        violation[{"msg": msg}] {
+          input.review.kind.kind == "Pod"
+          container := input.review.object.spec.containers[_]
+          not container.resources.limits.memory
+          msg := sprintf(
+            "MEDIUM [SEC006]: Container '%v' has no memory limit. Set resources.limits.memory to prevent resource exhaustion.",
+            [container.name],
+          )
+        }
+
+        violation[{"msg": msg}] {
+          input.review.kind.kind == "Pod"
+          container := input.review.object.spec.containers[_]
+          not container.resources.limits.cpu
+          msg := sprintf(
+            "LOW [SEC007]: Container '%v' has no CPU limit. Set resources.limits.cpu.",
+            [container.name],
+          )
+        }

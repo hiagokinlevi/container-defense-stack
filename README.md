@@ -17,6 +17,7 @@ Teams frequently deploy containers with excessive privileges, missing resource l
 - Implementing RBAC with minimum privilege
 - Segmenting namespaces with network policies
 - Validating manifests before deployment
+- Enforcing Pod guardrails with reusable OPA and Gatekeeper policies
 - Training teams on container security fundamentals
 
 ## Ethical Disclaimer
@@ -42,16 +43,29 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Validate a Kubernetes manifest
-k1n-container-guard validate-manifest --path deployment.yaml
+k1n-container-guard validate-manifest deployment.yaml
 
 # Validate a Dockerfile
-k1n-container-guard validate-dockerfile --path Dockerfile
+k1n-container-guard validate-dockerfile Dockerfile
 ```
 
 If you are working in an offline or PEP 668-managed environment, create the
 virtualenv with `python3 -m venv --system-site-packages .venv` and install with
 `pip install -e . --no-deps --no-build-isolation` to reuse the locally available
 Python packages.
+
+## Policy Packs
+
+- `policies/opa/` provides standalone Rego admission controls for OPA-based review.
+- `policies/gatekeeper/` provides deployable `ConstraintTemplate` and sample
+  `Constraint` manifests for the same Pod security controls.
+
+Apply the Gatekeeper library with:
+
+```bash
+kubectl apply -f policies/gatekeeper/constrainttemplates/
+kubectl apply -f policies/gatekeeper/constraints/
+```
 
 ## License
 

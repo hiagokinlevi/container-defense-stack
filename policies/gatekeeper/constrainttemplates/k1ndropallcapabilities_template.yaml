@@ -1,0 +1,24 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k1ndropallcapabilities
+spec:
+  crd:
+    spec:
+      names:
+        kind: K1nDropAllCapabilities
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k1ndropallcapabilities
+
+        violation[{"msg": msg}] {
+          input.review.kind.kind == "Pod"
+          container := input.review.object.spec.containers[_]
+          dropped := {cap | cap := container.securityContext.capabilities.drop[_]}
+          not "ALL" in dropped
+          msg := sprintf(
+            "MEDIUM [SEC005]: Container '%v' does not drop all capabilities. Add 'ALL' to securityContext.capabilities.drop and only add back what is explicitly needed.",
+            [container.name],
+          )
+        }

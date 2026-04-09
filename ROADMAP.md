@@ -15,7 +15,7 @@
 - [x] Distroless base image recommendations
 
 ## v0.3 — Admission Webhook
-- [ ] OPA/Gatekeeper policy library
+- [x] OPA/Gatekeeper policy library
 - [ ] Kyverno policy equivalents
 - [ ] Webhook deployment manifests
 

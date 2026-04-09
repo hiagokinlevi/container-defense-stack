@@ -1,0 +1,33 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k1nprivilegedcontainer
+spec:
+  crd:
+    spec:
+      names:
+        kind: K1nPrivilegedContainer
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k1nprivilegedcontainer
+
+        violation[{"msg": msg}] {
+          input.review.kind.kind == "Pod"
+          container := input.review.object.spec.containers[_]
+          container.securityContext.privileged == true
+          msg := sprintf(
+            "CRITICAL [SEC001]: Container '%v' requests privileged mode. Remove securityContext.privileged or set it to false.",
+            [container.name],
+          )
+        }
+
+        violation[{"msg": msg}] {
+          input.review.kind.kind == "Pod"
+          container := input.review.object.spec.initContainers[_]
+          container.securityContext.privileged == true
+          msg := sprintf(
+            "CRITICAL [SEC001]: initContainer '%v' requests privileged mode. Remove securityContext.privileged or set it to false.",
+            [container.name],
+          )
+        }
