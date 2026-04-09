@@ -1,0 +1,61 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: deny-host-namespaces
+  annotations:
+    policies.kyverno.io/title: Deny host namespaces
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: critical
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      CRITICAL [SEC010], CRITICAL [SEC011], and HIGH [SEC012]: Blocks Pods from
+      sharing host PID, network, or IPC namespaces.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: deny-host-pid
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          CRITICAL [SEC010]: Pods must not set hostPID: true.
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.hostPID || false }}"
+                operator: Equals
+                value: true
+    - name: deny-host-network
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          CRITICAL [SEC011]: Pods must not set hostNetwork: true.
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.hostNetwork || false }}"
+                operator: Equals
+                value: true
+    - name: deny-host-ipc
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          HIGH [SEC012]: Pods must not set hostIPC: true.
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.hostIPC || false }}"
+                operator: Equals
+                value: true

@@ -16,7 +16,7 @@
 
 ## v0.3 — Admission Webhook
 - [x] OPA/Gatekeeper policy library
-- [ ] Kyverno policy equivalents
+- [x] Kyverno policy equivalents
 - [ ] Webhook deployment manifests
 
 ## v0.4 — Cloud Provider Packs

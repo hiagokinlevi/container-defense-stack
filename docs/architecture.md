@@ -2,8 +2,8 @@
 
 This document describes the design of the repository's static validation and
 admission policy layers: `manifest_validator` for Kubernetes YAML manifests,
-`dockerfile_validator` for Dockerfiles, and the reusable OPA/Gatekeeper policy
-library under `policies/`.
+`dockerfile_validator` for Dockerfiles, and the reusable OPA/Gatekeeper/Kyverno
+policy library under `policies/`.
 
 ---
 
@@ -26,14 +26,15 @@ List[Finding]  — structured, serialisable result objects
     v
 CLI layer (Click + Rich table)
     |
-    +--> Admission layer (OPA Rego + Gatekeeper templates)
+    +--> Admission layer (OPA Rego + Gatekeeper templates + Kyverno policies)
 ```
 
 No network calls, no subprocess invocations, no cluster access — the validators
 are purely static analysis tools that run offline.
 
 The admission policies use the same control intent, but package it for cluster
-enforcement with Gatekeeper `ConstraintTemplate` and `Constraint` manifests.
+enforcement with Gatekeeper `ConstraintTemplate` / `Constraint` manifests and
+Kyverno `ClusterPolicy` manifests.
 
 ---
 
@@ -141,12 +142,15 @@ importing Click or Rich.
 
 `policies/opa/` contains standalone Rego rules for security checks that align
 with the manifest validator rule IDs. `policies/gatekeeper/` wraps the same
-controls into deployable Gatekeeper resources:
+controls into deployable Gatekeeper resources, and `policies/kyverno/` ships
+equivalent Kyverno `ClusterPolicy` manifests:
 
 1. `ConstraintTemplate` manifests embed the Rego policy under the
    `admission.k8s.gatekeeper.sh` target.
 2. Sample `Constraint` manifests bind each template to Pod admission.
-3. Rule IDs such as `SEC001`, `SEC004`, and `SEC010` remain aligned across
+3. Kyverno `ClusterPolicy` manifests express the same deny-by-default Pod
+   controls with per-rule `validate` blocks.
+4. Rule IDs such as `SEC001`, `SEC004`, and `SEC010` remain aligned across
    static validation and admission enforcement.
 
 This keeps shift-left checks and cluster admission controls consistent, so a

@@ -1,0 +1,64 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-container-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require container resource limits
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      MEDIUM [SEC006] and LOW [SEC007]: Requires memory and CPU limits on Pod
+      containers and init containers.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-memory-limits
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          MEDIUM [SEC006]: Containers must define resources.limits.memory.
+        foreach:
+          - list: "request.object.spec.containers || `[]`"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.resources.limits.memory || '' }}"
+                    operator: Equals
+                    value: ""
+          - list: "request.object.spec.initContainers || `[]`"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.resources.limits.memory || '' }}"
+                    operator: Equals
+                    value: ""
+    - name: require-cpu-limits
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          LOW [SEC007]: Containers must define resources.limits.cpu.
+        foreach:
+          - list: "request.object.spec.containers || `[]`"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.resources.limits.cpu || '' }}"
+                    operator: Equals
+                    value: ""
+          - list: "request.object.spec.initContainers || `[]`"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.resources.limits.cpu || '' }}"
+                    operator: Equals
+                    value: ""

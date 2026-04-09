@@ -59,12 +59,20 @@ Python packages.
 - `policies/opa/` provides standalone Rego admission controls for OPA-based review.
 - `policies/gatekeeper/` provides deployable `ConstraintTemplate` and sample
   `Constraint` manifests for the same Pod security controls.
+- `policies/kyverno/` provides deployable `ClusterPolicy` manifests for the
+  same deny-by-default Pod security controls.
 
 Apply the Gatekeeper library with:
 
 ```bash
 kubectl apply -f policies/gatekeeper/constrainttemplates/
 kubectl apply -f policies/gatekeeper/constraints/
+```
+
+Apply the Kyverno library with:
+
+```bash
+kubectl apply -f policies/kyverno/
 ```
 
 ## License
