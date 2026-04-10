@@ -189,8 +189,13 @@ def _load_eks_node_group_report(path: Path, cluster_name: str):
                 or payload.get("node_groups")
                 or []
             )
+        first_node_group = node_group_items[0] if node_group_items and isinstance(node_group_items[0], dict) else {}
         resolved_cluster_name = cluster_name or str(
-            payload.get("clusterName") or payload.get("cluster_name") or "eks-nodegroups"
+            payload.get("clusterName")
+            or payload.get("cluster_name")
+            or first_node_group.get("clusterName")
+            or first_node_group.get("cluster_name")
+            or "eks-nodegroups"
         )
     else:
         raise click.ClickException(
@@ -204,11 +209,10 @@ def _load_eks_node_group_report(path: Path, cluster_name: str):
     if invalid_items:
         raise click.ClickException(f"EKS node group entries must be JSON objects (invalid index: {invalid_items[0]}).")
 
-    parsed = [node_group_from_dict(item) for item in node_group_items]
-    if not cluster_name and parsed and resolved_cluster_name == "eks-nodegroups":
-        resolved_cluster_name = parsed[0].cluster_name
-
-    return analyze_node_groups(parsed, cluster_name=resolved_cluster_name)
+    return analyze_node_groups(
+        [node_group_from_dict(item) for item in node_group_items],
+        cluster_name=resolved_cluster_name,
+    )
 
 
 @cli.command("validate-manifest")
