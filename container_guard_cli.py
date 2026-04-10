@@ -7,6 +7,7 @@ Entry points:
   scan-helm-values PATH    — Scan a Helm values file for security issues.
   scan-helm-chart PATH     — Scan a Helm chart directory for security issues.
   scan-image-layers PATH   — Scan Docker/OCI layer metadata from a JSON file.
+  scan-eks-nodegroups PATH  — Scan EKS managed node group posture JSON.
 
 Exit codes:
   0 — No HIGH or CRITICAL findings.
@@ -27,6 +28,7 @@ from rich.table import Table
 
 from docker.layer_scanner import LayerFile, LayerMetadata, LayerScanner
 from kubernetes.aks_node_pool_analyzer import analyze_node_pools, node_pool_from_dict
+from kubernetes.eks_node_group_analyzer import analyze_node_groups, node_group_from_dict
 from kubernetes.workload_identity_checker import check_many, load_configs_from_file
 from validators.dockerfile_validator import Severity as DSeverity
 from validators.dockerfile_validator import validate_dockerfile
@@ -169,6 +171,44 @@ def _load_aks_node_pool_report(path: Path, cluster_name: str):
         [node_pool_from_dict(item) for item in node_pool_items],
         cluster_name=resolved_cluster_name,
     )
+
+
+def _load_eks_node_group_report(path: Path, cluster_name: str):
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    if isinstance(payload, list):
+        node_group_items = payload
+        resolved_cluster_name = cluster_name or "eks-nodegroups"
+    elif isinstance(payload, dict):
+        if isinstance(payload.get("nodegroup"), dict):
+            node_group_items = [payload["nodegroup"]]
+        else:
+            node_group_items = (
+                payload.get("nodegroups")
+                or payload.get("nodeGroups")
+                or payload.get("node_groups")
+                or []
+            )
+        resolved_cluster_name = cluster_name or str(
+            payload.get("clusterName") or payload.get("cluster_name") or "eks-nodegroups"
+        )
+    else:
+        raise click.ClickException(
+            "EKS node group JSON must be a list, an object with 'nodegroup', or an object with 'nodegroups'."
+        )
+
+    if not isinstance(node_group_items, list):
+        raise click.ClickException("The EKS node group payload must resolve to a list.")
+
+    invalid_items = [index for index, item in enumerate(node_group_items) if not isinstance(item, dict)]
+    if invalid_items:
+        raise click.ClickException(f"EKS node group entries must be JSON objects (invalid index: {invalid_items[0]}).")
+
+    parsed = [node_group_from_dict(item) for item in node_group_items]
+    if not cluster_name and parsed and resolved_cluster_name == "eks-nodegroups":
+        resolved_cluster_name = parsed[0].cluster_name
+
+    return analyze_node_groups(parsed, cluster_name=resolved_cluster_name)
 
 
 @cli.command("validate-manifest")
@@ -396,6 +436,47 @@ def scan_aks_nodepools_cmd(path: Path, cluster_name: str) -> None:
                 f"[{_SEVERITY_STYLE.get(f.severity, 'white')}]{f.severity}[/{_SEVERITY_STYLE.get(f.severity, 'white')}]",
                 f.check_id,
                 f.pool_name,
+                f.title,
+                f.detail,
+                f.remediation,
+            ]
+            for f in report.findings
+        ],
+    )
+    console.print(f"\nSummary: {report.summary()}", markup=False)
+
+    if any(f.severity in {"HIGH", "CRITICAL"} for f in report.findings):
+        console.print("[bold red]Exiting 1 — HIGH or CRITICAL findings detected.[/bold red]")
+        sys.exit(1)
+
+
+@cli.command("scan-eks-nodegroups")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--cluster-name", default="", help="Optional EKS cluster label shown in the report.")
+def scan_eks_nodegroups_cmd(path: Path, cluster_name: str) -> None:
+    """Scan EKS managed node group posture exported as JSON."""
+    report = _load_eks_node_group_report(path, cluster_name=cluster_name)
+
+    if not report.findings:
+        _print_success(path, noun="EKS node group export")
+        console.print(f"Summary: {report.summary()}", markup=False)
+        sys.exit(0)
+
+    _render_findings_table(
+        f"EKS node group findings: {path}",
+        [
+            ("Severity", "bold"),
+            ("Check ID", None),
+            ("Node Group", None),
+            ("Title", None),
+            ("Detail", "dim"),
+            ("Remediation", None),
+        ],
+        [
+            [
+                f"[{_SEVERITY_STYLE.get(f.severity, 'white')}]{f.severity}[/{_SEVERITY_STYLE.get(f.severity, 'white')}]",
+                f.check_id,
+                f.node_group_name,
                 f.title,
                 f.detail,
                 f.remediation,

@@ -1,6 +1,6 @@
 # container-defense-stack
 
-Container and Kubernetes security toolkit providing Dockerfile hardening guides, secure workload manifests, RBAC baselines, network policies, manifest validators, and offline AKS node-pool hardening checks for DevSecOps teams.
+Container and Kubernetes security toolkit providing Dockerfile hardening guides, secure workload manifests, RBAC baselines, network policies, manifest validators, and offline AKS/EKS node-pool hardening checks for DevSecOps teams.
 
 ## Objective
 
@@ -19,6 +19,7 @@ Teams frequently deploy containers with excessive privileges, missing resource l
 - Validating manifests before deployment
 - Enforcing Pod guardrails with reusable OPA and Gatekeeper policies
 - Reviewing exported AKS node-pool posture before production rollout
+- Reviewing exported EKS managed node group posture before production rollout
 - Training teams on container security fundamentals
 
 ## Ethical Disclaimer
@@ -60,6 +61,9 @@ k1n-container-guard scan-image-layers image-layers.json --image-tag ghcr.io/acme
 
 # Scan exported AKS node pool posture JSON
 k1n-container-guard scan-aks-nodepools aks-nodepools.json --cluster-name prod-aks
+
+# Scan exported EKS managed node group posture JSON
+k1n-container-guard scan-eks-nodegroups eks-nodegroups.json --cluster-name prod-eks
 
 # Scan Kubernetes workload identity posture from manifests
 k1n-container-guard scan-workload-identity workloads.yaml
@@ -120,6 +124,10 @@ either webhook template so enforcement is opt-in until you complete validation.
   accounts paired with cloud credential env vars, overly broad IRSA roles,
   shared cloud identities across workloads, and missing projected token
   audience or expiry controls.
+- `scan-eks-nodegroups` evaluates exported EKS managed node group posture for
+  SSH remote access, public subnet placement, IMDSv2 enforcement, explicit
+  Kubernetes version review, workload-isolation labels or taints, and managed
+  update disruption budgets.
 
 The `scan-image-layers` command accepts either a raw JSON list of layer objects
 or an object with `image_tag` and `layers` keys. Each layer supports
@@ -136,6 +144,9 @@ snapshots exported from `az aks show`.
 - [docs/aks-node-pool-hardening.md](docs/aks-node-pool-hardening.md) documents
   the shipped AKS node-pool hardening baseline and the `scan-aks-nodepools`
   offline review workflow.
+- [docs/eks-node-group-hardening.md](docs/eks-node-group-hardening.md) documents
+  the shipped EKS managed node group hardening baseline and the
+  `scan-eks-nodegroups` offline review workflow.
 
 The workload identity scanner merges `ServiceAccount` annotations with workload
 pod-template annotations so the same manifest bundle can be reviewed before it

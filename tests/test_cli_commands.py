@@ -184,6 +184,66 @@ def test_scan_aks_nodepools_succeeds_for_hardened_export(tmp_path: Path) -> None
     assert "AKSNodePoolReport [clean-aks]" in result.output
 
 
+def test_scan_eks_nodegroups_reports_hardening_findings(tmp_path: Path) -> None:
+    payload_path = tmp_path / "eks-nodegroup.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "nodegroup": {
+                    "nodegroupName": "prod-workers",
+                    "clusterName": "prod-eks",
+                    "amiType": "AL2_x86_64",
+                    "subnets": [{"subnetId": "subnet-123", "name": "public-a", "mapPublicIpOnLaunch": True}],
+                    "remoteAccess": {
+                        "ec2SshKey": "breakglass",
+                        "sourceSecurityGroups": ["sg-123"],
+                    },
+                    "metadataOptions": {"httpTokens": "optional"},
+                    "updateConfig": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["scan-eks-nodegroups", str(payload_path)])
+
+    assert result.exit_code == 1
+    assert "EKS-001" in result.output
+    assert "EKS-002" in result.output
+    assert "EKS-003" in result.output
+    assert "prod-eks" in result.output
+
+
+def test_scan_eks_nodegroups_succeeds_for_hardened_export(tmp_path: Path) -> None:
+    payload_path = tmp_path / "eks-nodegroups.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "clusterName": "clean-eks",
+                "nodegroups": [
+                    {
+                        "nodegroupName": "payments-workers",
+                        "version": "1.30",
+                        "amiType": "BOTTLEROCKET_x86_64",
+                        "subnets": [{"subnetId": "subnet-456", "name": "private-a", "mapPublicIpOnLaunch": False}],
+                        "labels": {"workload-tier": "restricted"},
+                        "taints": [{"key": "restricted", "value": "true", "effect": "NO_SCHEDULE"}],
+                        "metadataOptions": {"httpTokens": "required"},
+                        "updateConfig": {"maxUnavailable": 1},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["scan-eks-nodegroups", str(payload_path)])
+
+    assert result.exit_code == 0
+    assert "EKSNodeGroupReport [clean-eks]" in result.output
+
+
 def test_scan_workload_identity_reports_high_findings(tmp_path: Path) -> None:
     manifest_path = tmp_path / "workloads.yaml"
     manifest_path.write_text(
