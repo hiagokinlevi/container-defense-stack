@@ -8,6 +8,7 @@ Entry points:
   scan-helm-chart PATH     — Scan a Helm chart directory for security issues.
   scan-image-layers PATH   — Scan Docker/OCI layer metadata from a JSON file.
   scan-eks-nodegroups PATH  — Scan EKS managed node group posture JSON.
+  scan-gke-autopilot PATH   — Scan GKE Autopilot posture JSON.
 
 Exit codes:
   0 — No HIGH or CRITICAL findings.
@@ -29,6 +30,7 @@ from rich.table import Table
 from docker.layer_scanner import LayerFile, LayerMetadata, LayerScanner
 from kubernetes.aks_node_pool_analyzer import analyze_node_pools, node_pool_from_dict
 from kubernetes.eks_node_group_analyzer import analyze_node_groups, node_group_from_dict
+from kubernetes.gke_autopilot_analyzer import analyze_autopilot_clusters, autopilot_config_from_dict
 from kubernetes.workload_identity_checker import check_many, load_configs_from_file
 from validators.dockerfile_validator import Severity as DSeverity
 from validators.dockerfile_validator import validate_dockerfile
@@ -212,6 +214,37 @@ def _load_eks_node_group_report(path: Path, cluster_name: str):
     return analyze_node_groups(
         [node_group_from_dict(item) for item in node_group_items],
         cluster_name=resolved_cluster_name,
+    )
+
+
+def _load_gke_autopilot_report(path: Path, fleet_name: str):
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    if isinstance(payload, list):
+        cluster_items = payload
+        resolved_fleet_name = fleet_name or "gke-autopilot"
+    elif isinstance(payload, dict):
+        cluster_items = payload.get("clusters")
+        if cluster_items is None:
+            cluster_items = payload.get("items")
+        if cluster_items is None:
+            cluster_items = [payload]
+        resolved_fleet_name = fleet_name or str(
+            payload.get("fleetName") or payload.get("fleet_name") or payload.get("projectId") or "gke-autopilot"
+        )
+    else:
+        raise click.ClickException("GKE Autopilot JSON must be a list, a cluster object, or an object with 'clusters'.")
+
+    if not isinstance(cluster_items, list):
+        raise click.ClickException("The GKE Autopilot payload must resolve to a list.")
+
+    invalid_items = [index for index, item in enumerate(cluster_items) if not isinstance(item, dict)]
+    if invalid_items:
+        raise click.ClickException(f"GKE Autopilot entries must be JSON objects (invalid index: {invalid_items[0]}).")
+
+    return analyze_autopilot_clusters(
+        [autopilot_config_from_dict(item) for item in cluster_items],
+        fleet_name=resolved_fleet_name,
     )
 
 
@@ -481,6 +514,47 @@ def scan_eks_nodegroups_cmd(path: Path, cluster_name: str) -> None:
                 f"[{_SEVERITY_STYLE.get(f.severity, 'white')}]{f.severity}[/{_SEVERITY_STYLE.get(f.severity, 'white')}]",
                 f.check_id,
                 f.node_group_name,
+                f.title,
+                f.detail,
+                f.remediation,
+            ]
+            for f in report.findings
+        ],
+    )
+    console.print(f"\nSummary: {report.summary()}", markup=False)
+
+    if any(f.severity in {"HIGH", "CRITICAL"} for f in report.findings):
+        console.print("[bold red]Exiting 1 — HIGH or CRITICAL findings detected.[/bold red]")
+        sys.exit(1)
+
+
+@cli.command("scan-gke-autopilot")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--fleet-name", default="", help="Optional GKE fleet/project label shown in the report.")
+def scan_gke_autopilot_cmd(path: Path, fleet_name: str) -> None:
+    """Scan GKE Autopilot cluster posture exported as JSON."""
+    report = _load_gke_autopilot_report(path, fleet_name=fleet_name)
+
+    if not report.findings:
+        _print_success(path, noun="GKE Autopilot export")
+        console.print(f"Summary: {report.summary()}", markup=False)
+        sys.exit(0)
+
+    _render_findings_table(
+        f"GKE Autopilot findings: {path}",
+        [
+            ("Severity", "bold"),
+            ("Check ID", None),
+            ("Cluster", None),
+            ("Title", None),
+            ("Detail", "dim"),
+            ("Remediation", None),
+        ],
+        [
+            [
+                f"[{_SEVERITY_STYLE.get(f.severity, 'white')}]{f.severity}[/{_SEVERITY_STYLE.get(f.severity, 'white')}]",
+                f.check_id,
+                f.cluster_name,
                 f.title,
                 f.detail,
                 f.remediation,

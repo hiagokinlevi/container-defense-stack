@@ -6,7 +6,8 @@ admission policy layers: `manifest_validator` for Kubernetes YAML manifests,
 hardening, `layer_scanner` for OCI image layer metadata review,
 `workload_identity_checker` for multi-cloud workload identity posture review,
 `aks_node_pool_analyzer` for exported AKS node-pool posture review,
-`eks_node_group_analyzer` for exported EKS managed node group posture review, and the
+`eks_node_group_analyzer` for exported EKS managed node group posture review,
+`gke_autopilot_analyzer` for exported GKE Autopilot posture review, and the
 reusable OPA/Gatekeeper/Kyverno policy library under `policies/`.
 
 ---
@@ -36,7 +37,7 @@ CLI layer (Click + Rich table)
 No network calls, no subprocess invocations, no cluster access — the validators
 are purely static analysis tools that run offline.
 
-The Helm, layer, AKS node-pool, and EKS node group scanners follow the same offline model. They
+The Helm, layer, AKS node-pool, EKS node group, and GKE Autopilot scanners follow the same offline model. They
 parse local YAML or JSON artifacts and emit structured findings without pulling
 images, talking to clusters, or invoking Helm/Docker/Kubernetes CLIs.
 
@@ -55,6 +56,11 @@ The EKS managed node group analyzer parses exported AWS CLI or reduced posture
 JSON and applies explicit hardening checks for SSH remote access, public subnet
 markers, IMDSv2 enforcement, version review, workload-isolation labels or
 taints, and managed update disruption budgets without contacting AWS APIs.
+
+The GKE Autopilot analyzer parses exported gcloud or reduced posture JSON and
+applies explicit hardening checks for Autopilot mode evidence, private node
+placement, control-plane authorized networks, Workload Identity Federation, and
+Binary Authorization enforcement without contacting Google Cloud APIs.
 
 The admission policies use the same control intent, but package it for cluster
 enforcement with Gatekeeper `ConstraintTemplate` / `Constraint` manifests and
@@ -145,13 +151,15 @@ Both use `@dataclass` for zero-boilerplate construction, equality comparison, an
 repr. The `Severity` enums inherit from `str` so they serialise naturally to JSON
 without a custom encoder.
 
-### HelmFinding / LayerFinding / AKSFinding / EKSFinding
+### HelmFinding / LayerFinding / AKSFinding / EKSFinding / GKEAutopilotFinding
 
 `helm_scanner` emits `HelmFinding` objects keyed by rule IDs such as
 `HELM001` and `HELM014`, `layer_scanner` emits `LayerFinding` objects keyed by
 `LAY-001` through `LAY-007`, and `aks_node_pool_analyzer` emits `AKSFinding`
 objects keyed by `AKS-001` through `AKS-005`. `eks_node_group_analyzer` emits
-`EKSFinding` objects keyed by `EKS-001` through `EKS-006`. All keep the same
+`EKSFinding` objects keyed by `EKS-001` through `EKS-006`.
+`gke_autopilot_analyzer` emits `GKEAutopilotFinding` objects keyed by
+`GKE-AP-001` through `GKE-AP-005`. All keep the same
 design goals as the manifest and Dockerfile validators: explicit rule IDs,
 human-readable remediation guidance, and deterministic serialisable results for
 CI pipelines.
@@ -170,6 +178,7 @@ cli scan-helm-chart   PATH
 cli scan-image-layers PATH [--image-tag TAG]
 cli scan-aks-nodepools PATH [--cluster-name NAME]
 cli scan-eks-nodegroups PATH [--cluster-name NAME]
+cli scan-gke-autopilot PATH [--fleet-name NAME]
 cli scan-workload-identity PATH
 ```
 
@@ -198,6 +207,11 @@ describe-nodegroup-style payloads, and reduced objects containing `nodegroups`,
 `nodeGroups`, or `node_groups` arrays. It can also consume enriched subnet and
 launch-template metadata when teams add those fields to an offline posture
 artifact before review.
+
+`scan-gke-autopilot` accepts direct lists, full `gcloud container clusters
+describe --format=json` cluster objects, or reduced objects containing a
+`clusters` or `items` array. This supports single-cluster review and fleet-level
+pull request artifacts without live Google Cloud access.
 
 `scan-workload-identity` accepts a Kubernetes YAML bundle containing any mix of
 `ServiceAccount`, `Pod`, `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, and

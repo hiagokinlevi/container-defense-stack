@@ -1,6 +1,6 @@
 # container-defense-stack
 
-Container and Kubernetes security toolkit providing Dockerfile hardening guides, secure workload manifests, RBAC baselines, network policies, manifest validators, and offline AKS/EKS node-pool hardening checks for DevSecOps teams.
+Container and Kubernetes security toolkit providing Dockerfile hardening guides, secure workload manifests, RBAC baselines, network policies, manifest validators, and offline AKS/EKS/GKE cloud-provider hardening checks for DevSecOps teams.
 
 ## Objective
 
@@ -20,6 +20,7 @@ Teams frequently deploy containers with excessive privileges, missing resource l
 - Enforcing Pod guardrails with reusable OPA and Gatekeeper policies
 - Reviewing exported AKS node-pool posture before production rollout
 - Reviewing exported EKS managed node group posture before production rollout
+- Reviewing exported GKE Autopilot security posture before production rollout
 - Training teams on container security fundamentals
 
 ## Ethical Disclaimer
@@ -64,6 +65,9 @@ k1n-container-guard scan-aks-nodepools aks-nodepools.json --cluster-name prod-ak
 
 # Scan exported EKS managed node group posture JSON
 k1n-container-guard scan-eks-nodegroups eks-nodegroups.json --cluster-name prod-eks
+
+# Scan exported GKE Autopilot cluster posture JSON
+k1n-container-guard scan-gke-autopilot gke-autopilot.json --fleet-name prod-gke
 
 # Scan Kubernetes workload identity posture from manifests
 k1n-container-guard scan-workload-identity workloads.yaml
@@ -128,6 +132,9 @@ either webhook template so enforcement is opt-in until you complete validation.
   SSH remote access, public subnet placement, IMDSv2 enforcement, explicit
   Kubernetes version review, workload-isolation labels or taints, and managed
   update disruption budgets.
+- `scan-gke-autopilot` evaluates exported GKE Autopilot cluster posture for
+  Autopilot mode evidence, private node placement, control-plane authorized
+  networks, Workload Identity Federation, and Binary Authorization enforcement.
 
 The `scan-image-layers` command accepts either a raw JSON list of layer objects
 or an object with `image_tag` and `layers` keys. Each layer supports
@@ -147,6 +154,9 @@ snapshots exported from `az aks show`.
 - [docs/eks-node-group-hardening.md](docs/eks-node-group-hardening.md) documents
   the shipped EKS managed node group hardening baseline and the
   `scan-eks-nodegroups` offline review workflow.
+- [docs/gke-autopilot-security-baseline.md](docs/gke-autopilot-security-baseline.md)
+  documents the shipped GKE Autopilot security baseline and the
+  `scan-gke-autopilot` offline review workflow.
 
 The workload identity scanner merges `ServiceAccount` annotations with workload
 pod-template annotations so the same manifest bundle can be reviewed before it

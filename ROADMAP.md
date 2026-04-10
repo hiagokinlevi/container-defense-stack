@@ -23,4 +23,4 @@
 - [x] Multi-cloud workload identity manifest scanner
 - [x] AKS node pool hardening guide
 - [x] EKS managed node group hardening
-- [ ] GKE autopilot security baseline
+- [x] GKE autopilot security baseline

@@ -244,6 +244,64 @@ def test_scan_eks_nodegroups_succeeds_for_hardened_export(tmp_path: Path) -> Non
     assert "EKSNodeGroupReport [clean-eks]" in result.output
 
 
+def test_scan_gke_autopilot_reports_hardening_findings(tmp_path: Path) -> None:
+    payload_path = tmp_path / "gke-autopilot.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "projectId": "prod-project",
+                "clusters": [
+                    {
+                        "name": "prod-gke",
+                        "autopilot": {"enabled": False},
+                        "privateClusterConfig": {"enablePrivateNodes": False},
+                        "masterAuthorizedNetworksConfig": {"enabled": False},
+                        "workloadIdentityConfig": {},
+                        "binaryAuthorization": {"evaluationMode": "DISABLED"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["scan-gke-autopilot", str(payload_path)])
+
+    assert result.exit_code == 1
+    assert "GKE-AP-001" in result.output
+    assert "GKE-AP-002" in result.output
+    assert "GKE-AP-003" in result.output
+    assert "prod-project" in result.output
+
+
+def test_scan_gke_autopilot_succeeds_for_hardened_export(tmp_path: Path) -> None:
+    payload_path = tmp_path / "gke-autopilot.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "fleetName": "clean-gke",
+                "clusters": [
+                    {
+                        "name": "payments-gke",
+                        "autopilot": {"enabled": True},
+                        "privateClusterConfig": {"enablePrivateNodes": True},
+                        "masterAuthorizedNetworksConfig": {"enabled": True},
+                        "workloadIdentityConfig": {"workloadPool": "acme.svc.id.goog"},
+                        "binaryAuthorization": {"evaluationMode": "PROJECT_SINGLETON_POLICY_ENFORCE"},
+                        "releaseChannel": {"channel": "REGULAR"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["scan-gke-autopilot", str(payload_path)])
+
+    assert result.exit_code == 0
+    assert "GKEAutopilotReport [clean-gke]" in result.output
+
+
 def test_scan_workload_identity_reports_high_findings(tmp_path: Path) -> None:
     manifest_path = tmp_path / "workloads.yaml"
     manifest_path.write_text(
