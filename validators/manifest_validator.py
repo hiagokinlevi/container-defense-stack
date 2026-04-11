@@ -63,6 +63,14 @@ def _get_containers(doc: dict[str, Any]) -> list[dict]:
     return pod_spec.get("containers", []) + pod_spec.get("initContainers", [])
 
 
+def _get_pod_spec(doc: dict[str, Any]) -> dict[str, Any]:
+    """Extract the pod spec from a workload document."""
+    spec = doc.get("spec", {})
+    if doc.get("kind") == "CronJob":
+        spec = spec.get("jobTemplate", {}).get("spec", {})
+    return spec.get("template", {}).get("spec", {}) if doc.get("kind") != "Pod" else spec
+
+
 def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> None:
     """Run all security checks against a workload manifest."""
     containers = _get_containers(doc)
@@ -140,8 +148,7 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
             ))
 
     # Pod-level checks
-    spec = doc.get("spec", {})
-    pod_spec = spec.get("template", {}).get("spec", {}) if doc.get("kind") != "Pod" else spec
+    pod_spec = _get_pod_spec(doc)
     if pod_spec.get("automountServiceAccountToken") is not False:
         findings.append(ManifestFinding(
             rule_id="SEC008",
@@ -149,4 +156,31 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
             message="Service account token auto-mounted (unnecessary for most workloads)",
             path=f"{name}.spec.template.spec.automountServiceAccountToken",
             remediation="Set automountServiceAccountToken: false unless the pod needs API access",
+        ))
+
+    if pod_spec.get("hostPID") is True:
+        findings.append(ManifestFinding(
+            rule_id="SEC010",
+            severity=Severity.CRITICAL,
+            message="Workload shares the host PID namespace",
+            path=f"{name}.spec.template.spec.hostPID",
+            remediation="Set hostPID: false or remove the field to keep process namespaces isolated",
+        ))
+
+    if pod_spec.get("hostNetwork") is True:
+        findings.append(ManifestFinding(
+            rule_id="SEC011",
+            severity=Severity.CRITICAL,
+            message="Workload shares the host network namespace",
+            path=f"{name}.spec.template.spec.hostNetwork",
+            remediation="Set hostNetwork: false or remove the field to keep the pod on the cluster network",
+        ))
+
+    if pod_spec.get("hostIPC") is True:
+        findings.append(ManifestFinding(
+            rule_id="SEC012",
+            severity=Severity.HIGH,
+            message="Workload shares the host IPC namespace",
+            path=f"{name}.spec.template.spec.hostIPC",
+            remediation="Set hostIPC: false or remove the field to prevent access to host shared memory",
         ))

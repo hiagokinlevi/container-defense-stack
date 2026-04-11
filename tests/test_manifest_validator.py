@@ -157,3 +157,45 @@ def test_no_capabilities_drop(tmp_path: Path) -> None:
     findings = validate_manifest(manifest)
     rule_ids = [f.rule_id for f in findings]
     assert "SEC005" in rule_ids, "Expected SEC005 when ALL is not in capabilities.drop"
+
+
+# ---------------------------------------------------------------------------
+# SEC010 / SEC011 / SEC012 — host namespace sharing
+# ---------------------------------------------------------------------------
+def test_host_namespaces_flagged(tmp_path: Path) -> None:
+    """Host PID, network, and IPC sharing should align with admission policies."""
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: host-ns
+        spec:
+          template:
+            spec:
+              automountServiceAccountToken: false
+              hostPID: true
+              hostNetwork: true
+              hostIPC: true
+              containers:
+                - name: app
+                  image: myapp:1.0
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                    capabilities:
+                      drop: [ALL]
+                  resources:
+                    limits:
+                      memory: "256Mi"
+                      cpu: "500m"
+    """)
+    findings = validate_manifest(manifest)
+    by_rule = {f.rule_id: f for f in findings}
+
+    assert "SEC010" in by_rule, "Expected SEC010 for hostPID: true"
+    assert "SEC011" in by_rule, "Expected SEC011 for hostNetwork: true"
+    assert "SEC012" in by_rule, "Expected SEC012 for hostIPC: true"
+    assert by_rule["SEC010"].severity == Severity.CRITICAL
+    assert by_rule["SEC011"].severity == Severity.CRITICAL
+    assert by_rule["SEC012"].severity == Severity.HIGH
