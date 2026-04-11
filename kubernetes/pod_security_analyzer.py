@@ -17,6 +17,7 @@ PSS-005   Dangerous Linux capability added (NET_ADMIN/SYS_ADMIN/SYS_PTRACE/etc.)
 PSS-006   HostPath volume mount (direct access to node filesystem)
 PSS-007   No read-only root filesystem (readOnlyRootFilesystem not true)
 PSS-008   Container image uses 'latest' tag or no tag
+PSS-009   Seccomp profile is missing or not set to RuntimeDefault/Localhost
 
 Usage::
 
@@ -66,6 +67,7 @@ _CHECK_WEIGHTS: Dict[str, int] = {
     "PSS-006": 30,  # hostPath volume
     "PSS-007": 20,  # no read-only root filesystem
     "PSS-008": 15,  # latest / untagged image
+    "PSS-009": 20,  # seccomp profile missing or unconfined
 }
 
 # Capabilities that grant excessive privileges and should never appear in add[].
@@ -356,10 +358,11 @@ class PodSecurityAnalyzer:
         # security standards; check all of them.
         containers: List[Dict] = list(pod_spec.get("containers") or [])
         init_containers: List[Dict] = list(pod_spec.get("initContainers") or [])
+        pod_security_context: Dict = pod_spec.get("securityContext") or {}
 
         for container in containers + init_containers:
             findings.extend(
-                self._check_container(container, namespace, pod_name)
+                self._check_container(container, pod_security_context, namespace, pod_name)
             )
 
         return findings
@@ -367,6 +370,7 @@ class PodSecurityAnalyzer:
     def _check_container(
         self,
         container: Dict,
+        pod_security_context: Dict,
         namespace: str,
         pod_name: str,
     ) -> List[PSSFinding]:
@@ -387,6 +391,15 @@ class PodSecurityAnalyzer:
         )
         findings.extend(
             self._check_pss005_dangerous_caps(sc, namespace, pod_name, cname)
+        )
+        findings.extend(
+            self._check_pss009_seccomp_profile(
+                sc,
+                pod_security_context,
+                namespace,
+                pod_name,
+                cname,
+            )
         )
 
         if self._require_readonly_root:
@@ -711,6 +724,63 @@ class PodSecurityAnalyzer:
             )
         ]
 
+    @staticmethod
+    def _check_pss009_seccomp_profile(
+        sc: Dict,
+        pod_security_context: Dict,
+        namespace: str,
+        pod_name: str,
+        container_name: str,
+    ) -> List[PSSFinding]:
+        """PSS-009 — seccomp must resolve to RuntimeDefault or Localhost."""
+        container_profile = _seccomp_profile_type(sc)
+        pod_profile = _seccomp_profile_type(pod_security_context)
+        effective_profile = container_profile or pod_profile
+
+        if effective_profile in {"RuntimeDefault", "Localhost"}:
+            return []
+
+        if container_profile:
+            evidence = f"container securityContext.seccompProfile.type: {container_profile}"
+        elif pod_profile:
+            evidence = f"pod securityContext.seccompProfile.type: {pod_profile}"
+        else:
+            evidence = "seccompProfile.type is not set at the pod or container level"
+
+        if not effective_profile:
+            detail = (
+                "No seccomp profile is set for the container or its parent pod. "
+                "Without RuntimeDefault or Localhost filtering, syscall exposure depends on "
+                "runtime defaults and may permit a broader attack surface."
+            )
+        elif effective_profile == "Unconfined":
+            detail = (
+                "The effective seccomp profile is Unconfined. This disables syscall filtering "
+                "and removes an important container escape mitigation."
+            )
+        else:
+            detail = (
+                f"The effective seccomp profile is '{effective_profile}'. "
+                "Restricted workloads should use RuntimeDefault or an approved Localhost profile."
+            )
+
+        return [
+            PSSFinding(
+                check_id="PSS-009",
+                severity=PSSSeverity.MEDIUM,
+                namespace=namespace,
+                pod_name=pod_name,
+                container_name=container_name,
+                title="Seccomp profile is not hardened",
+                detail=detail,
+                remediation=(
+                    "Set securityContext.seccompProfile.type to RuntimeDefault at the pod level "
+                    "or use an approved Localhost profile for the container."
+                ),
+                evidence=evidence,
+            )
+        ]
+
     # ------------------------------------------------------------------
     # Risk scoring
     # ------------------------------------------------------------------
@@ -727,3 +797,11 @@ class PodSecurityAnalyzer:
         fired_checks = {f.check_id for f in findings}
         total = sum(_CHECK_WEIGHTS.get(cid, 0) for cid in fired_checks)
         return min(total, 100)
+
+
+def _seccomp_profile_type(security_context: Dict[str, Any]) -> str:
+    """Return the seccompProfile.type string from a security context, if present."""
+    seccomp_profile = security_context.get("seccompProfile")
+    if not isinstance(seccomp_profile, dict):
+        return ""
+    return str(seccomp_profile.get("type") or "").strip()

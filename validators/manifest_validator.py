@@ -73,8 +73,15 @@ def _get_pod_spec(doc: dict[str, Any]) -> dict[str, Any]:
 
 def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> None:
     """Run all security checks against a workload manifest."""
+    pod_spec = _get_pod_spec(doc)
+    pod_security_context = pod_spec.get("securityContext", {})
     containers = _get_containers(doc)
     name = doc.get("metadata", {}).get("name", "<unnamed>")
+    pod_security_context_path = (
+        f"{name}.spec.securityContext"
+        if doc.get("kind") == "Pod"
+        else f"{name}.spec.template.spec.securityContext"
+    )
 
     for c in containers:
         cname = c.get("name", "<unnamed>")
@@ -128,6 +135,27 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
                 remediation="Set securityContext.capabilities.drop: [ALL]",
             ))
 
+        container_seccomp = _seccomp_profile_type(sc)
+        pod_seccomp = _seccomp_profile_type(pod_security_context)
+        effective_seccomp = container_seccomp or pod_seccomp
+        if effective_seccomp not in {"RuntimeDefault", "Localhost"}:
+            findings.append(ManifestFinding(
+                rule_id="SEC009",
+                severity=Severity.MEDIUM,
+                message=(
+                    f"Container '{cname}' does not inherit RuntimeDefault or Localhost seccomp filtering"
+                ),
+                path=(
+                    f"{prefix}.securityContext.seccompProfile.type"
+                    if container_seccomp or not pod_seccomp
+                    else f"{pod_security_context_path}.seccompProfile.type"
+                ),
+                remediation=(
+                    "Set securityContext.seccompProfile.type to RuntimeDefault at the pod level "
+                    "or configure an approved Localhost profile."
+                ),
+            ))
+
         resources = c.get("resources", {})
         if not resources.get("limits", {}).get("memory"):
             findings.append(ManifestFinding(
@@ -148,7 +176,6 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
             ))
 
     # Pod-level checks
-    pod_spec = _get_pod_spec(doc)
     if pod_spec.get("automountServiceAccountToken") is not False:
         findings.append(ManifestFinding(
             rule_id="SEC008",
@@ -184,3 +211,10 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
             path=f"{name}.spec.template.spec.hostIPC",
             remediation="Set hostIPC: false or remove the field to prevent access to host shared memory",
         ))
+
+
+def _seccomp_profile_type(security_context: dict[str, Any]) -> str:
+    seccomp_profile = security_context.get("seccompProfile")
+    if not isinstance(seccomp_profile, dict):
+        return ""
+    return str(seccomp_profile.get("type") or "").strip()

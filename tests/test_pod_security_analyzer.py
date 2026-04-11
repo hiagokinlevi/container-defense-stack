@@ -1,7 +1,7 @@
 """
 Tests for kubernetes.pod_security_analyzer
 ===========================================
-Covers all 8 PSS checks (fire + no-fire), report structure, risk scoring,
+Covers all 9 PSS checks (fire + no-fire), report structure, risk scoring,
 multi-kind support, initContainer detection, image tag edge-cases, and the
 public dataclass APIs (PSSFinding / PSSReport).
 
@@ -38,6 +38,7 @@ def _pod(
     namespace: str = "default",
     containers=None,
     init_containers=None,
+    pod_seccomp_type: str | None = None,
     host_network: bool = False,
     host_pid: bool = False,
     host_ipc: bool = False,
@@ -59,6 +60,8 @@ def _pod(
         spec["hostIPC"] = True
     if volumes is not None:
         spec["volumes"] = volumes
+    if pod_seccomp_type is not None:
+        spec["securityContext"] = {"seccompProfile": {"type": pod_seccomp_type}}
 
     return {
         "apiVersion": "v1",
@@ -78,6 +81,7 @@ def _container(
     readonly_root=None,
     caps_add=None,
     caps_drop=None,
+    seccomp_type: str | None = None,
 ) -> dict:
     """Build a minimal container spec dict."""
     sc: dict = {}
@@ -98,6 +102,8 @@ def _container(
         if caps_drop:
             capabilities["drop"] = caps_drop
         sc["capabilities"] = capabilities
+    if seccomp_type is not None:
+        sc["seccompProfile"] = {"type": seccomp_type}
 
     cspec: dict = {"name": name, "image": image}
     if sc:
@@ -187,6 +193,7 @@ def _hardened_container(name: str = "hardened") -> dict:
         allow_privilege_escalation=False,
         readonly_root=True,
         privileged=False,
+        seccomp_type="RuntimeDefault",
     )
 
 
@@ -617,6 +624,76 @@ class TestPSS008ImageTag:
 
 
 # ---------------------------------------------------------------------------
+# PSS-009 — Seccomp profile hardening
+# ---------------------------------------------------------------------------
+
+
+class TestPSS009SeccompProfile:
+    def test_fires_when_seccomp_profile_missing(self, analyzer):
+        pod = _pod(containers=[_container(allow_privilege_escalation=False, readonly_root=True)])
+        report = analyzer.analyze([pod])
+        assert "PSS-009" in _check_ids(report)
+
+    def test_fires_when_seccomp_profile_is_unconfined(self, analyzer):
+        pod = _pod(
+            containers=[
+                _container(
+                    allow_privilege_escalation=False,
+                    readonly_root=True,
+                    seccomp_type="Unconfined",
+                )
+            ]
+        )
+        report = analyzer.analyze([pod])
+        finding = next(f for f in report.findings if f.check_id == "PSS-009")
+        assert "Unconfined" in finding.detail
+
+    def test_no_fire_when_pod_level_runtime_default_is_set(self, analyzer):
+        pod = _pod(
+            containers=[_container(allow_privilege_escalation=False, readonly_root=True)],
+            pod_seccomp_type="RuntimeDefault",
+        )
+        report = analyzer.analyze([pod])
+        findings_009 = [f for f in report.findings if f.check_id == "PSS-009"]
+        assert findings_009 == []
+
+    def test_no_fire_when_container_level_localhost_is_set(self, analyzer):
+        pod = _pod(
+            containers=[
+                _container(
+                    allow_privilege_escalation=False,
+                    readonly_root=True,
+                    seccomp_type="Localhost",
+                )
+            ]
+        )
+        report = analyzer.analyze([pod])
+        findings_009 = [f for f in report.findings if f.check_id == "PSS-009"]
+        assert findings_009 == []
+
+    def test_severity_is_medium(self, analyzer):
+        pod = _pod(containers=[_container(allow_privilege_escalation=False, readonly_root=True)])
+        report = analyzer.analyze([pod])
+        finding = next(f for f in report.findings if f.check_id == "PSS-009")
+        assert finding.severity == PSSSeverity.MEDIUM
+
+    def test_fires_in_init_container_when_pod_level_profile_missing(self, analyzer):
+        pod = _pod(
+            containers=[_hardened_container()],
+            init_containers=[
+                _container(
+                    name="init-seccomp",
+                    allow_privilege_escalation=False,
+                    readonly_root=True,
+                )
+            ],
+        )
+        report = analyzer.analyze([pod])
+        findings = [f for f in report.findings if f.check_id == "PSS-009"]
+        assert any(f.container_name == "init-seccomp" for f in findings)
+
+
+# ---------------------------------------------------------------------------
 # Multi-kind support
 # ---------------------------------------------------------------------------
 
@@ -873,7 +950,12 @@ class TestRiskScoring:
         # Use allow_privilege_escalation=False so only PSS-002 fires; that isolates
         # the test to a single check type repeated across many containers.
         containers = [
-            _container(name=f"c{i}", privileged=True, allow_privilege_escalation=False)
+            _container(
+                name=f"c{i}",
+                privileged=True,
+                allow_privilege_escalation=False,
+                seccomp_type="RuntimeDefault",
+            )
             for i in range(10)
         ]
         pod = _pod(containers=containers)
@@ -919,6 +1001,11 @@ class TestHappyPath:
         pod = _pod(containers=[_hardened_container()])
         report = analyzer.analyze([pod])
         assert "PSS-007" not in _check_ids(report)
+
+    def test_fully_hardened_pod_has_no_pss009(self, analyzer):
+        pod = _pod(containers=[_hardened_container()])
+        report = analyzer.analyze([pod])
+        assert "PSS-009" not in _check_ids(report)
 
     def test_fully_hardened_pod_with_pss_disabled_options(self):
         analyzer = PodSecurityAnalyzer(check_latest_tag=False, require_readonly_root=False)

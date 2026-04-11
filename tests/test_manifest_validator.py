@@ -69,6 +69,9 @@ def test_secure_manifest_passes(tmp_path: Path) -> None:
         spec:
           template:
             spec:
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
               automountServiceAccountToken: false
               containers:
                 - name: app
@@ -157,6 +160,67 @@ def test_no_capabilities_drop(tmp_path: Path) -> None:
     findings = validate_manifest(manifest)
     rule_ids = [f.rule_id for f in findings]
     assert "SEC005" in rule_ids, "Expected SEC005 when ALL is not in capabilities.drop"
+
+
+def test_missing_seccomp_profile_detected(tmp_path: Path) -> None:
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: no-seccomp
+        spec:
+          template:
+            spec:
+              automountServiceAccountToken: false
+              containers:
+                - name: app
+                  image: myapp:1.0
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                    capabilities:
+                      drop: [ALL]
+                  resources:
+                    limits:
+                      memory: "256Mi"
+                      cpu: "500m"
+    """)
+    findings = validate_manifest(manifest)
+    seccomp_finding = next(f for f in findings if f.rule_id == "SEC009")
+    assert seccomp_finding.severity == Severity.MEDIUM
+
+
+def test_pod_level_seccomp_profile_passes(tmp_path: Path) -> None:
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: pod-seccomp
+        spec:
+          template:
+            spec:
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
+              automountServiceAccountToken: false
+              containers:
+                - name: app
+                  image: myapp:1.0
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                    capabilities:
+                      drop: [ALL]
+                  resources:
+                    limits:
+                      memory: "256Mi"
+                      cpu: "500m"
+    """)
+    findings = validate_manifest(manifest)
+    rule_ids = [f.rule_id for f in findings]
+    assert "SEC009" not in rule_ids
 
 
 # ---------------------------------------------------------------------------
