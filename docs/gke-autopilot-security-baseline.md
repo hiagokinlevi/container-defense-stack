@@ -66,4 +66,6 @@ You can also scan a reduced multi-cluster review artifact:
 - Use reduced artifacts in pull requests when full `gcloud` exports include
   noisy metadata that reviewers do not need.
 - If your organization uses private endpoint-only control-plane access instead
-  of master authorized networks, document the exception with the review export.
+  of master authorized networks, include `privateClusterConfig.enablePrivateEndpoint`
+  evidence in the review export so the offline scanner can treat it as an
+  equivalent control-plane restriction.

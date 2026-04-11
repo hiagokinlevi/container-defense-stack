@@ -302,6 +302,36 @@ def test_scan_gke_autopilot_succeeds_for_hardened_export(tmp_path: Path) -> None
     assert "GKEAutopilotReport [clean-gke]" in result.output
 
 
+def test_scan_gke_autopilot_accepts_private_endpoint_only_control_plane(tmp_path: Path) -> None:
+    payload_path = tmp_path / "gke-autopilot-private-endpoint.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "fleetName": "private-endpoint-gke",
+                "clusters": [
+                    {
+                        "name": "payments-gke",
+                        "autopilot": {"enabled": True},
+                        "privateClusterConfig": {
+                            "enablePrivateNodes": True,
+                            "enablePrivateEndpoint": True,
+                        },
+                        "masterAuthorizedNetworksConfig": {"enabled": False},
+                        "workloadIdentityConfig": {"workloadPool": "acme.svc.id.goog"},
+                        "binaryAuthorization": {"evaluationMode": "PROJECT_SINGLETON_POLICY_ENFORCE"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["scan-gke-autopilot", str(payload_path)])
+
+    assert result.exit_code == 0
+    assert "GKEAutopilotReport [private-endpoint-gke]" in result.output
+
+
 def test_scan_workload_identity_reports_high_findings(tmp_path: Path) -> None:
     manifest_path = tmp_path / "workloads.yaml"
     manifest_path.write_text(

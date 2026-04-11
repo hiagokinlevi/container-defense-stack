@@ -31,6 +31,7 @@ class GKEAutopilotConfig:
     location: str = ""
     autopilot_enabled: bool = False
     private_nodes_enabled: bool = False
+    private_endpoint_enabled: bool = False
     master_authorized_networks_enabled: bool = False
     workload_identity_pool: str = ""
     binary_authorization_enabled: bool = False
@@ -139,6 +140,8 @@ def autopilot_config_from_dict(payload: dict[str, Any]) -> GKEAutopilotConfig:
         or _coerce_bool(payload.get("autopilot_enabled")),
         private_nodes_enabled=_nested_bool(payload, "privateClusterConfig", "enablePrivateNodes")
         or _nested_bool(payload, "private_cluster_config", "enable_private_nodes"),
+        private_endpoint_enabled=_nested_bool(payload, "privateClusterConfig", "enablePrivateEndpoint")
+        or _nested_bool(payload, "private_cluster_config", "enable_private_endpoint"),
         master_authorized_networks_enabled=_nested_bool(payload, "masterAuthorizedNetworksConfig", "enabled")
         or _nested_bool(payload, "master_authorized_networks_config", "enabled"),
         workload_identity_pool=workload_identity_pool,
@@ -172,14 +175,14 @@ def _check_private_nodes(config: GKEAutopilotConfig) -> GKEAutopilotFinding | No
 
 
 def _check_authorized_networks(config: GKEAutopilotConfig) -> GKEAutopilotFinding | None:
-    if config.master_authorized_networks_enabled:
+    if config.master_authorized_networks_enabled or config.private_endpoint_enabled:
         return None
     return _make_finding(
         check_id="GKE-AP-003",
         cluster_name=config.name,
         title="Control plane authorized networks are not enabled",
         detail=f"GKE Autopilot cluster '{config.name}' does not restrict API server source networks.",
-        remediation="Enable master authorized networks or an equivalent private control-plane access pattern.",
+        remediation="Enable master authorized networks or a private control-plane endpoint access pattern.",
     )
 
 
