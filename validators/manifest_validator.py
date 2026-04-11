@@ -22,6 +22,27 @@ class Severity(str, Enum):
     INFO = "INFO"
 
 
+# Capabilities that materially increase kernel- or host-level attack surface.
+_DANGEROUS_CAPS = frozenset(
+    {
+        "NET_ADMIN",
+        "SYS_ADMIN",
+        "SYS_PTRACE",
+        "SYS_MODULE",
+        "SYS_RAWIO",
+        "SYS_BOOT",
+        "SYS_NICE",
+        "SYS_RESOURCE",
+        "SYS_TIME",
+        "MKNOD",
+        "SETUID",
+        "SETGID",
+        "DAC_OVERRIDE",
+        "DAC_READ_SEARCH",
+    }
+)
+
+
 @dataclass
 class ManifestFinding:
     rule_id: str
@@ -142,6 +163,23 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
                 message=f"Container '{cname}' does not drop all Linux capabilities",
                 path=f"{prefix}.securityContext.capabilities.drop",
                 remediation="Set securityContext.capabilities.drop: [ALL]",
+            ))
+
+        added = caps.get("add", [])
+        dangerous_added = sorted({cap.upper() for cap in added if cap.upper() in _DANGEROUS_CAPS})
+        if dangerous_added:
+            findings.append(ManifestFinding(
+                rule_id="SEC013",
+                severity=Severity.CRITICAL,
+                message=(
+                    f"Container '{cname}' adds dangerous Linux capabilities: "
+                    f"{', '.join(dangerous_added)}"
+                ),
+                path=f"{prefix}.securityContext.capabilities.add",
+                remediation=(
+                    "Remove dangerous entries from securityContext.capabilities.add. "
+                    "Drop ALL capabilities and add back only narrowly scoped exceptions."
+                ),
             ))
 
         container_seccomp = _seccomp_profile_type(sc)

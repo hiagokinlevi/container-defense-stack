@@ -69,10 +69,10 @@ def test_secure_manifest_passes(tmp_path: Path) -> None:
         spec:
           template:
             spec:
+              automountServiceAccountToken: false
               securityContext:
                 seccompProfile:
                   type: RuntimeDefault
-              automountServiceAccountToken: false
               containers:
                 - name: app
                   image: myapp:1.0
@@ -98,6 +98,112 @@ def test_secure_manifest_passes(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# SEC009 — missing or unsafe seccomp profile
+# ---------------------------------------------------------------------------
+def test_missing_seccomp_profile_flagged(tmp_path: Path) -> None:
+    """SEC009 is raised when neither the container nor pod sets an approved seccomp profile."""
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: no-seccomp
+        spec:
+          template:
+            spec:
+              automountServiceAccountToken: false
+              containers:
+                - name: app
+                  image: myapp:1.0
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                    capabilities:
+                      drop: [ALL]
+                  resources:
+                    limits:
+                      memory: "256Mi"
+                      cpu: "500m"
+    """)
+    findings = validate_manifest(manifest)
+    by_rule = {f.rule_id: f for f in findings}
+
+    assert "SEC009" in by_rule, "Expected SEC009 when seccompProfile.type is missing"
+    assert by_rule["SEC009"].severity == Severity.MEDIUM
+
+
+def test_pod_level_runtime_default_seccomp_profile_passes(tmp_path: Path) -> None:
+    """SEC009 accepts a pod-level RuntimeDefault seccomp profile inherited by the container."""
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: pod-seccomp
+        spec:
+          template:
+            spec:
+              automountServiceAccountToken: false
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+                - name: app
+                  image: myapp:1.0
+                  securityContext:
+                    privileged: false
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                    capabilities:
+                      drop: [ALL]
+                  resources:
+                    limits:
+                      memory: "256Mi"
+                      cpu: "500m"
+    """)
+    findings = validate_manifest(manifest)
+    rule_ids = [f.rule_id for f in findings]
+
+    assert "SEC009" not in rule_ids, "Did not expect SEC009 for inherited RuntimeDefault seccompProfile.type"
+
+
+def test_localhost_seccomp_profile_passes(tmp_path: Path) -> None:
+    """SEC009 accepts a reviewed Localhost seccomp profile."""
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: localhost-seccomp
+        spec:
+          template:
+            spec:
+              automountServiceAccountToken: false
+              securityContext:
+                seccompProfile:
+                  type: Localhost
+                  localhostProfile: profiles/runtime-seccomp.json
+              containers:
+                - name: app
+                  image: myapp:1.0
+                  securityContext:
+                    privileged: false
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                    capabilities:
+                      drop: [ALL]
+                  resources:
+                    limits:
+                      memory: "256Mi"
+                      cpu: "500m"
+    """)
+    findings = validate_manifest(manifest)
+    rule_ids = [f.rule_id for f in findings]
+
+    assert "SEC009" not in rule_ids, "Did not expect SEC009 for Localhost seccompProfile.type"
+
+
+# ---------------------------------------------------------------------------
 # SEC006 / SEC007 — missing resource limits
 # ---------------------------------------------------------------------------
 def test_missing_resource_limits(tmp_path: Path) -> None:
@@ -111,6 +217,9 @@ def test_missing_resource_limits(tmp_path: Path) -> None:
           template:
             spec:
               automountServiceAccountToken: false
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
               containers:
                 - name: app
                   image: myapp:1.0
@@ -142,6 +251,9 @@ def test_no_capabilities_drop(tmp_path: Path) -> None:
           template:
             spec:
               automountServiceAccountToken: false
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
               containers:
                 - name: app
                   image: myapp:1.0
@@ -162,16 +274,23 @@ def test_no_capabilities_drop(tmp_path: Path) -> None:
     assert "SEC005" in rule_ids, "Expected SEC005 when ALL is not in capabilities.drop"
 
 
-def test_missing_seccomp_profile_detected(tmp_path: Path) -> None:
+# ---------------------------------------------------------------------------
+# SEC013 — dangerous capabilities added
+# ---------------------------------------------------------------------------
+def test_dangerous_capability_add_is_flagged(tmp_path: Path) -> None:
+    """SEC013 is raised when a container adds a dangerous Linux capability."""
     manifest = _write_manifest(tmp_path, """\
         apiVersion: apps/v1
         kind: Deployment
         metadata:
-          name: no-seccomp
+          name: dangerous-cap
         spec:
           template:
             spec:
               automountServiceAccountToken: false
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
               containers:
                 - name: app
                   image: myapp:1.0
@@ -181,38 +300,45 @@ def test_missing_seccomp_profile_detected(tmp_path: Path) -> None:
                     runAsNonRoot: true
                     capabilities:
                       drop: [ALL]
+                      add: [SYS_ADMIN]
                   resources:
                     limits:
                       memory: "256Mi"
                       cpu: "500m"
     """)
     findings = validate_manifest(manifest)
-    seccomp_finding = next(f for f in findings if f.rule_id == "SEC009")
-    assert seccomp_finding.severity == Severity.MEDIUM
+    by_rule = {f.rule_id: f for f in findings}
+
+    assert "SEC013" in by_rule, "Expected SEC013 when a dangerous capability is added"
+    assert by_rule["SEC013"].severity == Severity.CRITICAL
+    assert "SYS_ADMIN" in by_rule["SEC013"].message
 
 
-def test_pod_level_seccomp_profile_passes(tmp_path: Path) -> None:
+def test_non_dangerous_capability_add_is_allowed(tmp_path: Path) -> None:
+    """SEC013 ignores non-dangerous capabilities so the validator stays precise."""
     manifest = _write_manifest(tmp_path, """\
         apiVersion: apps/v1
         kind: Deployment
         metadata:
-          name: pod-seccomp
+          name: benign-cap
         spec:
           template:
             spec:
+              automountServiceAccountToken: false
               securityContext:
                 seccompProfile:
                   type: RuntimeDefault
-              automountServiceAccountToken: false
               containers:
                 - name: app
                   image: myapp:1.0
                   securityContext:
+                    privileged: false
                     allowPrivilegeEscalation: false
                     readOnlyRootFilesystem: true
                     runAsNonRoot: true
                     capabilities:
                       drop: [ALL]
+                      add: [CHOWN]
                   resources:
                     limits:
                       memory: "256Mi"
@@ -220,7 +346,8 @@ def test_pod_level_seccomp_profile_passes(tmp_path: Path) -> None:
     """)
     findings = validate_manifest(manifest)
     rule_ids = [f.rule_id for f in findings]
-    assert "SEC009" not in rule_ids
+
+    assert "SEC013" not in rule_ids, "Did not expect SEC013 for non-dangerous capability adds"
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +364,9 @@ def test_host_namespaces_flagged(tmp_path: Path) -> None:
           template:
             spec:
               automountServiceAccountToken: false
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
               hostPID: true
               hostNetwork: true
               hostIPC: true
