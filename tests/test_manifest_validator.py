@@ -263,3 +263,95 @@ def test_host_namespaces_flagged(tmp_path: Path) -> None:
     assert by_rule["SEC010"].severity == Severity.CRITICAL
     assert by_rule["SEC011"].severity == Severity.CRITICAL
     assert by_rule["SEC012"].severity == Severity.HIGH
+
+
+def test_ephemeral_container_is_validated(tmp_path: Path) -> None:
+    """Ephemeral containers should not bypass core security-context checks."""
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: debug-pod
+        spec:
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          automountServiceAccountToken: false
+          containers:
+            - name: app
+              image: myapp:1.0
+              securityContext:
+                privileged: false
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                limits:
+                  memory: "256Mi"
+                  cpu: "500m"
+          ephemeralContainers:
+            - name: debugger
+              image: busybox:1.36
+              targetContainerName: app
+              securityContext:
+                privileged: true
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop: [ALL]
+    """)
+
+    findings = validate_manifest(manifest)
+
+    privileged_finding = next(f for f in findings if f.rule_id == "SEC001")
+    assert privileged_finding.message == "Container 'debugger' runs as privileged"
+    assert privileged_finding.path == "debug-pod.ephemeralContainers.debugger.securityContext.privileged"
+
+
+def test_ephemeral_container_skips_resource_limit_checks(tmp_path: Path) -> None:
+    """Ephemeral containers do not support resources, so limit findings should not fire."""
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: debug-pod
+        spec:
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          automountServiceAccountToken: false
+          containers:
+            - name: app
+              image: myapp:1.0
+              securityContext:
+                privileged: false
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                limits:
+                  memory: "256Mi"
+                  cpu: "500m"
+          ephemeralContainers:
+            - name: debugger
+              image: busybox:1.36
+              targetContainerName: app
+              securityContext:
+                privileged: false
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop: [ALL]
+    """)
+
+    findings = validate_manifest(manifest)
+    rule_ids = {f.rule_id for f in findings}
+
+    assert "SEC006" not in rule_ids
+    assert "SEC007" not in rule_ids

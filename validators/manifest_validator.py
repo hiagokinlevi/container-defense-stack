@@ -5,10 +5,12 @@ Checks manifests for common misconfigurations and produces structured findings.
 Severity levels: CRITICAL, HIGH, MEDIUM, LOW, INFO.
 """
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
 import yaml
 
 
@@ -54,13 +56,20 @@ def validate_manifest(manifest_path: Path) -> list[ManifestFinding]:
     return findings
 
 
-def _get_containers(doc: dict[str, Any]) -> list[dict]:
-    """Extract container specs from any workload kind."""
-    spec = doc.get("spec", {})
-    if doc.get("kind") == "CronJob":
-        spec = spec.get("jobTemplate", {}).get("spec", {})
-    pod_spec = spec.get("template", {}).get("spec", {}) if doc.get("kind") != "Pod" else spec
-    return pod_spec.get("containers", []) + pod_spec.get("initContainers", [])
+def _iter_containers(doc: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Extract regular, init, and ephemeral containers from a workload."""
+    pod_spec = _get_pod_spec(doc)
+    containers: list[tuple[str, dict[str, Any]]] = []
+    for field_name in ("containers", "initContainers", "ephemeralContainers"):
+        raw_items = pod_spec.get(field_name, [])
+        if not isinstance(raw_items, list):
+            continue
+        containers.extend(
+            (field_name, item)
+            for item in raw_items
+            if isinstance(item, dict)
+        )
+    return containers
 
 
 def _get_pod_spec(doc: dict[str, Any]) -> dict[str, Any]:
@@ -75,7 +84,7 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
     """Run all security checks against a workload manifest."""
     pod_spec = _get_pod_spec(doc)
     pod_security_context = pod_spec.get("securityContext", {})
-    containers = _get_containers(doc)
+    containers = _iter_containers(doc)
     name = doc.get("metadata", {}).get("name", "<unnamed>")
     pod_security_context_path = (
         f"{name}.spec.securityContext"
@@ -83,10 +92,10 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
         else f"{name}.spec.template.spec.securityContext"
     )
 
-    for c in containers:
+    for container_type, c in containers:
         cname = c.get("name", "<unnamed>")
         sc = c.get("securityContext", {})
-        prefix = f"{name}.containers.{cname}"
+        prefix = f"{name}.{container_type}.{cname}"
 
         if sc.get("privileged") is True:
             findings.append(ManifestFinding(
@@ -155,6 +164,10 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
                     "or configure an approved Localhost profile."
                 ),
             ))
+
+        # Ephemeral containers do not support resources, so limit checks would be noise.
+        if container_type == "ephemeralContainers":
+            continue
 
         resources = c.get("resources", {})
         if not resources.get("limits", {}).get("memory"):
