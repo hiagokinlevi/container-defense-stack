@@ -15,6 +15,7 @@ POLICIES = [
     ("require-drop-all-capabilities.yaml", "require-drop-all-capabilities", {"SEC005"}, {"require-drop-all-capabilities"}),
     ("require-container-resource-limits.yaml", "require-container-resource-limits", {"SEC006", "SEC007"}, {"require-memory-limits", "require-cpu-limits"}),
     ("deny-host-namespaces.yaml", "deny-host-namespaces", {"SEC010", "SEC011", "SEC012"}, {"deny-host-pid", "deny-host-network", "deny-host-ipc"}),
+    ("deny-hostpath-volumes.yaml", "deny-hostpath-volumes", {"SEC014"}, {"deny-hostpath-volumes"}),
 ]
 
 

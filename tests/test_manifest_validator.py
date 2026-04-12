@@ -485,3 +485,91 @@ def test_ephemeral_container_skips_resource_limit_checks(tmp_path: Path) -> None
 
     assert "SEC006" not in rule_ids
     assert "SEC007" not in rule_ids
+
+
+# ---------------------------------------------------------------------------
+# SEC014 — hostPath volumes
+# ---------------------------------------------------------------------------
+def test_hostpath_volume_flagged(tmp_path: Path) -> None:
+    """SEC014 is raised when a workload declares a hostPath volume."""
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: hostpath-volume
+        spec:
+          template:
+            spec:
+              automountServiceAccountToken: false
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+                - name: app
+                  image: myapp:1.0
+                  volumeMounts:
+                    - name: node-logs
+                      mountPath: /host/var/log
+                      readOnly: true
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                    capabilities:
+                      drop: [ALL]
+                  resources:
+                    limits:
+                      memory: "256Mi"
+                      cpu: "500m"
+              volumes:
+                - name: node-logs
+                  hostPath:
+                    path: /var/log
+                    type: Directory
+    """)
+    findings = validate_manifest(manifest)
+    by_rule = {f.rule_id: f for f in findings}
+
+    assert "SEC014" in by_rule, "Expected SEC014 for hostPath volumes"
+    assert by_rule["SEC014"].severity == Severity.HIGH
+    assert "/var/log" in by_rule["SEC014"].message
+
+
+def test_non_hostpath_volume_is_allowed(tmp_path: Path) -> None:
+    """SEC014 does not fire for safer in-cluster volume types."""
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: emptydir-volume
+        spec:
+          template:
+            spec:
+              automountServiceAccountToken: false
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+                - name: app
+                  image: myapp:1.0
+                  volumeMounts:
+                    - name: scratch
+                      mountPath: /tmp/scratch
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                    capabilities:
+                      drop: [ALL]
+                  resources:
+                    limits:
+                      memory: "256Mi"
+                      cpu: "500m"
+              volumes:
+                - name: scratch
+                  emptyDir: {}
+    """)
+    findings = validate_manifest(manifest)
+    rule_ids = [f.rule_id for f in findings]
+
+    assert "SEC014" not in rule_ids, "Did not expect SEC014 for emptyDir volumes"

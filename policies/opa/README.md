@@ -16,6 +16,7 @@ Each policy is a standalone `.rego` file that can be deployed via:
 | `require_resource_limits.rego` | SEC006, SEC007 | MEDIUM/LOW | Require CPU and memory limits |
 | `require_drop_all_capabilities.rego` | SEC005 | MEDIUM | Require `capabilities.drop: [ALL]` |
 | `deny_host_namespaces.rego` | SEC010-012 | CRITICAL/HIGH | Block `hostPID`, `hostNetwork`, `hostIPC` |
+| `deny_hostpath_volumes.rego` | SEC014 | HIGH | Block `hostPath` volumes that expose node filesystems |
 
 ## Quick Test with OPA CLI
 

@@ -15,6 +15,7 @@ and Gatekeeper pack.
 | Drop all capabilities | `require-drop-all-capabilities.yaml` | `SEC005` |
 | CPU and memory limits | `require-container-resource-limits.yaml` | `SEC006`, `SEC007` |
 | Host namespace isolation | `deny-host-namespaces.yaml` | `SEC010`, `SEC011`, `SEC012` |
+| HostPath volume isolation | `deny-hostpath-volumes.yaml` | `SEC014` |
 
 ## Apply
 

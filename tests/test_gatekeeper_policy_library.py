@@ -46,6 +46,12 @@ POLICIES = [
         "K1nDenyHostNamespaces",
         "SEC010",
     ),
+    (
+        "k1ndenyhostpathvolumes_template.yaml",
+        "k1ndenyhostpathvolumes.yaml",
+        "K1nDenyHostPathVolumes",
+        "SEC014",
+    ),
 ]
 
 

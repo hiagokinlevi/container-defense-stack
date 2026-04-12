@@ -1,0 +1,24 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k1ndenyhostpathvolumes
+spec:
+  crd:
+    spec:
+      names:
+        kind: K1nDenyHostPathVolumes
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k1ndenyhostpathvolumes
+
+        violation[{"msg": msg}] {
+          input.review.kind.kind == "Pod"
+          volume := input.review.object.spec.volumes[_]
+          volume.hostPath
+          path := volume.hostPath.path
+          msg := sprintf(
+            "HIGH [SEC014]: Pod volume '%v' declares hostPath '%v'. Replace hostPath with a safer volume type or isolate the workload and mount only a narrowly scoped read-only path when no alternative exists.",
+            [volume.name, path],
+          )
+        }

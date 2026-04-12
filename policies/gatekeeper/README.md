@@ -16,6 +16,7 @@ policies. Each policy includes:
 | Drop all capabilities | `constrainttemplates/k1ndropallcapabilities_template.yaml` | `constraints/k1ndropallcapabilities.yaml` | `SEC005` |
 | CPU and memory limits | `constrainttemplates/k1nresourcelimits_template.yaml` | `constraints/k1nresourcelimits.yaml` | `SEC006`, `SEC007` |
 | Host namespace isolation | `constrainttemplates/k1ndenyhostnamespaces_template.yaml` | `constraints/k1ndenyhostnamespaces.yaml` | `SEC010`, `SEC011`, `SEC012` |
+| HostPath volume isolation | `constrainttemplates/k1ndenyhostpathvolumes_template.yaml` | `constraints/k1ndenyhostpathvolumes.yaml` | `SEC014` |
 
 ## Apply
 

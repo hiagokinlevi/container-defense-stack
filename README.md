@@ -8,7 +8,7 @@ Provide production-ready, reusable security baselines for containerized workload
 
 ## Problem Solved
 
-Teams frequently deploy containers with excessive privileges, missing resource limits, and no network segmentation. This toolkit provides validated templates, validators, and documentation to establish security-by-default.
+Teams frequently deploy containers with excessive privileges, missing resource limits, unsafe host mounts, and no network segmentation. This toolkit provides validated templates, validators, and documentation to establish security-by-default.
 
 ## Use Cases
 
@@ -84,7 +84,7 @@ Python packages.
 - `policies/gatekeeper/` provides deployable `ConstraintTemplate` and sample
   `Constraint` manifests for the same Pod security controls.
 - `policies/kyverno/` provides deployable `ClusterPolicy` manifests for the
-  same deny-by-default Pod security controls.
+  same deny-by-default Pod security controls, including `hostPath` denial.
 - `kubernetes/admission/` provides hardened validating and mutating webhook
   deployment templates with cert-manager-backed TLS, opt-in namespace scoping,
   and secure runtime defaults for teams building custom admission services.

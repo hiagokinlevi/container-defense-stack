@@ -1,0 +1,33 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: deny-hostpath-volumes
+  annotations:
+    policies.kyverno.io/title: Deny hostPath volumes
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      HIGH [SEC014]: Blocks Pods from declaring hostPath volumes that expose
+      node filesystems to workloads.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: deny-hostpath-volumes
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          HIGH [SEC014]: Pods must not declare hostPath volumes.
+        foreach:
+          - list: "request.object.spec.volumes || `[]`"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.hostPath.path || '' }}"
+                    operator: NotEquals
+                    value: ""

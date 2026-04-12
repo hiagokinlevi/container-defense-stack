@@ -106,6 +106,7 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
     pod_spec = _get_pod_spec(doc)
     pod_security_context = pod_spec.get("securityContext", {})
     containers = _iter_containers(doc)
+    volumes = pod_spec.get("volumes", [])
     name = doc.get("metadata", {}).get("name", "<unnamed>")
     pod_security_context_path = (
         f"{name}.spec.securityContext"
@@ -261,6 +262,29 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
             message="Workload shares the host IPC namespace",
             path=f"{name}.spec.template.spec.hostIPC",
             remediation="Set hostIPC: false or remove the field to prevent access to host shared memory",
+        ))
+
+    for volume in volumes:
+        host_path = volume.get("hostPath")
+        if not isinstance(host_path, dict):
+            continue
+
+        volume_name = str(volume.get("name") or "<unnamed>")
+        host_path_value = str(host_path.get("path") or "<unspecified>")
+        findings.append(ManifestFinding(
+            rule_id="SEC014",
+            severity=Severity.HIGH,
+            message=(
+                f"Volume '{volume_name}' declares a hostPath mount "
+                f"('{host_path_value}')"
+            ),
+            path=f"{name}.volumes.{volume_name}.hostPath",
+            remediation=(
+                "Replace hostPath with a safer volume type such as emptyDir, "
+                "projected, secret, configMap, or a PVC. If hostPath is "
+                "unavoidable, isolate the workload and mount only a narrowly "
+                "scoped read-only path."
+            ),
         ))
 
 
