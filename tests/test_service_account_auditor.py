@@ -448,7 +448,7 @@ class TestSA005:
         result = analyze(sa, bindings=[binding], roles=[])
         assert all(f.check_id != "SA-005" for f in result.findings)
 
-    def test_does_not_fire_when_bound_to_aggregate_to_edit(self):
+    def test_fires_when_bound_to_aggregate_to_edit(self):
         sa = make_sa(name="default", automount=False)
         binding = make_binding(
             "agg-edit-rb", "ClusterRoleBinding",
@@ -456,7 +456,7 @@ class TestSA005:
             "default", "default"
         )
         result = analyze(sa, bindings=[binding], roles=[])
-        assert all(f.check_id != "SA-005" for f in result.findings)
+        assert any(f.check_id == "SA-005" for f in result.findings)
 
     def test_severity_is_high(self):
         sa = make_sa(name="default", namespace="my-ns", automount=False)

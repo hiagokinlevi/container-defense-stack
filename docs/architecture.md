@@ -93,13 +93,15 @@ untrusted manifest content.
 
 All checks live in `_check_workload(doc, findings)`. The function:
 
-1. Extracts the container list via `_get_containers(doc)`, which handles the
-   structural difference between `Deployment`, `Job`, `CronJob`, and raw `Pod`
-   manifests.
-2. Iterates over each container and inspects the `securityContext` and `resources`
-   keys.
+1. Extracts regular, init, and ephemeral containers via `_iter_containers(doc)`,
+   which handles the structural difference between `Deployment`, `Job`,
+   `CronJob`, and raw `Pod` manifests.
+2. Iterates over each container and inspects the `securityContext` plus
+   supported `resources` keys.
 3. Appends a `ManifestFinding` to `findings` for each policy violation.
-4. Performs one pod-level check: `automountServiceAccountToken`.
+4. Skips resource-limit findings for ephemeral containers because Kubernetes
+   does not allow `resources` on that container type.
+5. Performs one pod-level check: `automountServiceAccountToken`.
 
 Each check is an explicit `if` statement with a direct dict key lookup — no
 schema library or external rule engine. This keeps the logic readable and keeps
@@ -226,8 +228,8 @@ checks before rendering a CI-friendly exit code.
 `ClusterRole` resources. The loader resolves bindings and referenced RBAC rules
 offline, then runs privilege-escalation checks for cluster-admin access,
 wildcard verbs, cluster-wide secrets reads, ServiceAccount token minting,
-default ServiceAccount reuse, and registry credential exposure before rendering
-a CI-friendly exit code.
+default ServiceAccount reuse, edit-style aggregate role reuse, and registry
+credential exposure before rendering a CI-friendly exit code.
 
 ---
 

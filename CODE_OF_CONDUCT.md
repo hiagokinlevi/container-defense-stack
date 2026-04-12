@@ -12,6 +12,6 @@ Unacceptable behavior includes: trolling, harassment, publishing others' private
 
 ## Enforcement
 
-Instances of abusive behavior may be reported to the maintainers at security@hiagokinlevi.dev.
+Instances of abusive behavior may be reported to the maintainers at hiagokinlevi@protonmail.com.
 
 Adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.

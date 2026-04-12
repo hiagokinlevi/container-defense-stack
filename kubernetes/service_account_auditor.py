@@ -57,7 +57,6 @@ _DEFAULT_SA_ALLOWED_ROLES = frozenset(
     {
         "view",
         "system:aggregate-to-view",
-        "system:aggregate-to-edit",
     }
 )
 

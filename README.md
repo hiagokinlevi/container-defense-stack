@@ -136,8 +136,8 @@ either webhook template so enforcement is opt-in until you complete validation.
   `ServiceAccount`, `RoleBinding`, `ClusterRoleBinding`, `Role`, and
   `ClusterRole` resources so teams can catch cluster-admin bindings, wildcard
   verbs, cluster-wide secrets access, token minting rights, default
-  ServiceAccount overreach, and exposed image pull credentials before applying
-  RBAC changes.
+  ServiceAccount overreach, edit-style aggregate role reuse, and exposed image
+  pull credentials before applying RBAC changes.
 - `scan-eks-nodegroups` evaluates exported EKS managed node group posture for
   SSH remote access, public subnet placement, IMDSv2 enforcement, explicit
   Kubernetes version review, workload-isolation labels or taints, and managed
@@ -177,7 +177,10 @@ The ServiceAccount scanner resolves RoleBinding and ClusterRoleBinding subjects
 against the ServiceAccounts in the same YAML bundle, then inspects the
 referenced Role and ClusterRole rules offline. It also flags roles that can
 mint new `serviceaccounts/token` credentials so RBAC privilege review stays in
-CI before the manifests ever reach a cluster API server.
+CI before the manifests ever reach a cluster API server. Built-in
+`system:aggregate-to-edit` bindings are treated as non-trivial for the default
+ServiceAccount because they grant namespace write privileges to any pod that
+falls back to the default identity.
 
 ## License
 

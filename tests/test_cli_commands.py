@@ -448,6 +448,41 @@ def test_scan_serviceaccounts_reports_privileged_bindings(tmp_path: Path) -> Non
     assert "SA-005" in result.output
 
 
+def test_scan_serviceaccounts_flags_aggregate_to_edit_on_default_service_account(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "serviceaccounts.yaml"
+    manifest_path.write_text(
+        textwrap.dedent(
+            """
+            apiVersion: v1
+            kind: ServiceAccount
+            metadata:
+              name: default
+              namespace: prod
+            automountServiceAccountToken: false
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRoleBinding
+            metadata:
+              name: default-edit
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: ClusterRole
+              name: system:aggregate-to-edit
+            subjects:
+              - kind: ServiceAccount
+                name: default
+                namespace: prod
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["scan-serviceaccounts", str(manifest_path)])
+
+    assert result.exit_code == 1
+    assert "SA-005" in result.output
+
+
 def test_scan_serviceaccounts_reports_token_request_minting_risk(tmp_path: Path) -> None:
     manifest_path = tmp_path / "serviceaccounts.yaml"
     manifest_path.write_text(

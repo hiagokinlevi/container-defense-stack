@@ -1,7 +1,7 @@
 # Roadmap
 
 ## v0.1 — Core Validators (current)
-- [x] Kubernetes manifest security validator (SEC001–SEC008)
+- [x] Kubernetes manifest security validator (SEC001–SEC012)
 - [x] Dockerfile security validator (DF001–DF005)
 - [x] Secure Deployment / Job YAML templates
 - [x] RBAC minimum-privilege templates
