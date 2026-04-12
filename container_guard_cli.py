@@ -7,6 +7,7 @@ Entry points:
   scan-helm-values PATH    — Scan a Helm values file for security issues.
   scan-helm-chart PATH     — Scan a Helm chart directory for security issues.
   scan-image-layers PATH   — Scan Docker/OCI layer metadata from a JSON file.
+  scan-serviceaccounts PATH — Scan ServiceAccounts and attached RBAC from YAML.
   scan-eks-nodegroups PATH  — Scan EKS managed node group posture JSON.
   scan-gke-autopilot PATH   — Scan GKE Autopilot posture JSON.
 
@@ -31,6 +32,10 @@ from docker.layer_scanner import LayerFile, LayerMetadata, LayerScanner
 from kubernetes.aks_node_pool_analyzer import analyze_node_pools, node_pool_from_dict
 from kubernetes.eks_node_group_analyzer import analyze_node_groups, node_group_from_dict
 from kubernetes.gke_autopilot_analyzer import analyze_autopilot_clusters, autopilot_config_from_dict
+from kubernetes.service_account_auditor import (
+    analyze_many as audit_service_accounts,
+    load_audit_inputs_from_file,
+)
 from kubernetes.workload_identity_checker import check_many, load_configs_from_file
 from validators.dockerfile_validator import Severity as DSeverity
 from validators.dockerfile_validator import validate_dockerfile
@@ -142,6 +147,18 @@ def _load_workload_identity_results(path: Path):
         raise click.ClickException("No supported Kubernetes workloads found in the provided YAML.")
 
     return check_many(configs)
+
+
+def _load_service_account_results(path: Path):
+    try:
+        service_accounts, bindings, roles = load_audit_inputs_from_file(path)
+    except yaml.YAMLError as exc:
+        raise click.ClickException(f"Unable to parse Kubernetes YAML: {exc}") from exc
+
+    if not service_accounts:
+        raise click.ClickException("No ServiceAccount resources found in the provided YAML.")
+
+    return audit_service_accounts(service_accounts, bindings=bindings, roles=roles)
 
 
 def _load_aks_node_pool_report(path: Path, cluster_name: str):
@@ -608,6 +625,52 @@ def scan_workload_identity_cmd(path: Path) -> None:
     console.print(
         f"\n[bold]Total findings:[/bold] {len(findings)} "
         f"across {len(results)} workload(s); highest workload risk score={total_risk}/100"
+    )
+
+    if any(finding.severity in {"HIGH", "CRITICAL"} for finding in findings):
+        console.print("[bold red]Exiting 1 — HIGH or CRITICAL findings detected.[/bold red]")
+        sys.exit(1)
+
+
+@cli.command("scan-serviceaccounts")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def scan_serviceaccounts_cmd(path: Path) -> None:
+    """Scan ServiceAccounts and attached RBAC in PATH for privilege risks."""
+    results = _load_service_account_results(path)
+    findings = [finding for result in results for finding in result.findings]
+
+    if not findings:
+        _print_success(path, noun="ServiceAccount manifest")
+        console.print(f"Summary: analyzed {len(results)} ServiceAccount(s) with no findings.", markup=False)
+        sys.exit(0)
+
+    _render_findings_table(
+        f"ServiceAccount findings: {path}",
+        [
+            ("Severity", "bold"),
+            ("Check ID", None),
+            ("ServiceAccount", None),
+            ("Namespace", "dim"),
+            ("Title", None),
+            ("Detail", None),
+        ],
+        [
+            [
+                f"[{_SEVERITY_STYLE.get(finding.severity, 'white')}]{finding.severity}[/{_SEVERITY_STYLE.get(finding.severity, 'white')}]",
+                finding.check_id,
+                result.sa_name,
+                result.namespace,
+                finding.title,
+                finding.detail,
+            ]
+            for result in results
+            for finding in result.findings
+        ],
+    )
+    total_risk = max(result.risk_score for result in results)
+    console.print(
+        f"\n[bold]Total findings:[/bold] {len(findings)} "
+        f"across {len(results)} ServiceAccount(s); highest ServiceAccount risk score={total_risk}/100"
     )
 
     if any(finding.severity in {"HIGH", "CRITICAL"} for finding in findings):

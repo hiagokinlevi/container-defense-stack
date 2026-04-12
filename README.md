@@ -15,6 +15,7 @@ Teams frequently deploy containers with excessive privileges, missing resource l
 - Hardening Dockerfiles for Python, Node.js, and Go applications
 - Applying security context to Kubernetes workloads
 - Implementing RBAC with minimum privilege
+- Auditing ServiceAccounts and attached RBAC before deployment
 - Segmenting namespaces with network policies
 - Validating manifests before deployment
 - Enforcing Pod guardrails with reusable OPA and Gatekeeper policies
@@ -71,6 +72,9 @@ k1n-container-guard scan-gke-autopilot gke-autopilot.json --fleet-name prod-gke
 
 # Scan Kubernetes workload identity posture from manifests
 k1n-container-guard scan-workload-identity workloads.yaml
+
+# Scan ServiceAccounts and attached RBAC from manifests
+k1n-container-guard scan-serviceaccounts rbac-bundle.yaml
 ```
 
 If you are working in an offline or PEP 668-managed environment, create the
@@ -128,6 +132,11 @@ either webhook template so enforcement is opt-in until you complete validation.
   accounts paired with cloud credential env vars, overly broad IRSA roles,
   shared cloud identities across workloads, and missing projected token
   audience or expiry controls.
+- `scan-serviceaccounts` parses Kubernetes YAML bundles containing
+  `ServiceAccount`, `RoleBinding`, `ClusterRoleBinding`, `Role`, and
+  `ClusterRole` resources so teams can catch cluster-admin bindings, wildcard
+  verbs, cluster-wide secrets access, default ServiceAccount overreach, and
+  exposed image pull credentials before applying RBAC changes.
 - `scan-eks-nodegroups` evaluates exported EKS managed node group posture for
   SSH remote access, public subnet placement, IMDSv2 enforcement, explicit
   Kubernetes version review, workload-isolation labels or taints, and managed
@@ -162,6 +171,11 @@ The workload identity scanner merges `ServiceAccount` annotations with workload
 pod-template annotations so the same manifest bundle can be reviewed before it
 ever reaches a cluster. That keeps EKS IRSA, GKE Workload Identity, and Azure
 Workload Identity posture checks available in offline CI and pre-deploy review.
+
+The ServiceAccount scanner resolves RoleBinding and ClusterRoleBinding subjects
+against the ServiceAccounts in the same YAML bundle, then inspects the
+referenced Role and ClusterRole rules offline. That keeps RBAC privilege review
+available in CI before the manifests ever reach a cluster API server.
 
 ## License
 

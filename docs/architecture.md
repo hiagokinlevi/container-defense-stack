@@ -176,6 +176,7 @@ cli validate-dockerfile PATH
 cli scan-helm-values  PATH [--chart-name NAME]
 cli scan-helm-chart   PATH
 cli scan-image-layers PATH [--image-tag TAG]
+cli scan-serviceaccounts PATH
 cli scan-aks-nodepools PATH [--cluster-name NAME]
 cli scan-eks-nodegroups PATH [--cluster-name NAME]
 cli scan-gke-autopilot PATH [--fleet-name NAME]
@@ -219,6 +220,13 @@ pull request artifacts without live Google Cloud access.
 pod-template annotations, extracts env var names plus projected service account
 token settings, and then runs the single-workload plus cross-workload identity
 checks before rendering a CI-friendly exit code.
+
+`scan-serviceaccounts` accepts Kubernetes YAML bundles containing any mix of
+`ServiceAccount`, `RoleBinding`, `ClusterRoleBinding`, `Role`, and
+`ClusterRole` resources. The loader resolves bindings and referenced RBAC rules
+offline, then runs privilege-escalation checks for cluster-admin access,
+wildcard verbs, cluster-wide secrets reads, default ServiceAccount reuse, and
+registry credential exposure before rendering a CI-friendly exit code.
 
 ---
 

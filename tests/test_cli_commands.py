@@ -1,4 +1,4 @@
-"""CLI coverage for the exposed Helm and layer scanners."""
+"""CLI coverage for the exposed Helm, Kubernetes, and layer scanners."""
 
 from __future__ import annotations
 
@@ -411,3 +411,84 @@ def test_scan_workload_identity_succeeds_for_scoped_projected_tokens(tmp_path: P
 
     assert result.exit_code == 0
     assert "analyzed 1 workload(s) with no findings" in result.output
+
+
+def test_scan_serviceaccounts_reports_privileged_bindings(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "serviceaccounts.yaml"
+    manifest_path.write_text(
+        textwrap.dedent(
+            """
+            apiVersion: v1
+            kind: ServiceAccount
+            metadata:
+              name: default
+              namespace: prod
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRoleBinding
+            metadata:
+              name: default-admin
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: ClusterRole
+              name: cluster-admin
+            subjects:
+              - kind: ServiceAccount
+                name: default
+                namespace: prod
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["scan-serviceaccounts", str(manifest_path)])
+
+    assert result.exit_code == 1
+    assert "SA-001" in result.output
+    assert "SA-005" in result.output
+
+
+def test_scan_serviceaccounts_succeeds_for_scoped_service_account_bundle(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "serviceaccounts.yaml"
+    manifest_path.write_text(
+        textwrap.dedent(
+            """
+            apiVersion: v1
+            kind: ServiceAccount
+            metadata:
+              name: api-sa
+              namespace: prod
+            automountServiceAccountToken: false
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: Role
+            metadata:
+              name: api-reader
+              namespace: prod
+            rules:
+              - apiGroups: [""]
+                resources: ["configmaps"]
+                verbs: ["get", "list"]
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: RoleBinding
+            metadata:
+              name: api-reader-binding
+              namespace: prod
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: Role
+              name: api-reader
+            subjects:
+              - kind: ServiceAccount
+                name: api-sa
+                namespace: prod
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["scan-serviceaccounts", str(manifest_path)])
+
+    assert result.exit_code == 0
+    assert "analyzed 1 ServiceAccount(s) with no findings" in result.output

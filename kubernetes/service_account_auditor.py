@@ -8,7 +8,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional
+
+import yaml
 
 # ---------------------------------------------------------------------------
 # Check weight registry
@@ -57,6 +60,9 @@ _DEFAULT_SA_ALLOWED_ROLES = frozenset(
 
 # Verbs that constitute "read" access for SA-004 secrets check
 _SECRETS_READ_VERBS = frozenset({"get", "list", "watch"})
+_SERVICE_ACCOUNT_KIND = "ServiceAccount"
+_BINDING_KINDS = frozenset({"RoleBinding", "ClusterRoleBinding"})
+_ROLE_KINDS = frozenset({"Role", "ClusterRole"})
 
 
 # ---------------------------------------------------------------------------
@@ -440,3 +446,31 @@ def analyze_many(
         One SAResult per input ServiceAccount, in the same order.
     """
     return [analyze(sa, bindings=bindings, roles=roles) for sa in service_accounts]
+
+
+def load_audit_inputs_from_manifests(manifests: List[dict]) -> tuple[List[dict], List[dict], List[dict]]:
+    """Split Kubernetes manifests into ServiceAccount, binding, and role lists."""
+    service_accounts: List[dict] = []
+    bindings: List[dict] = []
+    roles: List[dict] = []
+
+    for manifest in manifests:
+        if not isinstance(manifest, dict):
+            continue
+
+        kind = str(manifest.get("kind", ""))
+        if kind == _SERVICE_ACCOUNT_KIND:
+            service_accounts.append(manifest)
+        elif kind in _BINDING_KINDS:
+            bindings.append(manifest)
+        elif kind in _ROLE_KINDS:
+            roles.append(manifest)
+
+    return service_accounts, bindings, roles
+
+
+def load_audit_inputs_from_file(path: Path) -> tuple[List[dict], List[dict], List[dict]]:
+    """Load ServiceAccount audit inputs from a multi-document Kubernetes YAML file."""
+    with path.open("r", encoding="utf-8") as handle:
+        manifests = [doc for doc in yaml.safe_load_all(handle) if isinstance(doc, dict)]
+    return load_audit_inputs_from_manifests(manifests)
