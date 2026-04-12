@@ -98,6 +98,15 @@ SECRETS_BINDING = make_binding(
     "my-sa", "default"
 )
 
+TOKEN_REQUEST_ROLE = make_role(
+    "token-minter", "ClusterRole",
+    [make_rule(["create"], ["serviceaccounts/token"])]
+)
+TOKEN_REQUEST_BINDING = make_binding(
+    "token-request-binding", "ClusterRoleBinding", "token-minter", "ClusterRole",
+    "my-sa", "default"
+)
+
 
 # ===========================================================================
 # SA-001 — cluster-admin ClusterRoleBinding
@@ -619,6 +628,65 @@ class TestSA007:
 
 
 # ===========================================================================
+# SA-008 — ServiceAccount token minting via TokenRequest
+# ===========================================================================
+
+class TestSA008:
+    """SA-008: bound role can create new ServiceAccount tokens."""
+
+    def test_fires_when_binding_can_create_serviceaccount_tokens(self):
+        sa = make_sa(automount=False)
+        result = analyze(sa, bindings=[TOKEN_REQUEST_BINDING], roles=[TOKEN_REQUEST_ROLE])
+        assert any(f.check_id == "SA-008" for f in result.findings)
+
+    def test_fires_for_namespace_scoped_rolebinding(self):
+        sa = make_sa(automount=False)
+        role = make_role("token-minter", "Role", [make_rule(["create"], ["serviceaccounts/token"])])
+        binding = make_binding(
+            "ns-token-binding", "RoleBinding", "token-minter", "Role",
+            "my-sa", "default"
+        )
+        result = analyze(sa, bindings=[binding], roles=[role])
+        assert any(f.check_id == "SA-008" for f in result.findings)
+
+    def test_does_not_fire_for_serviceaccounts_resource_without_token_subresource(self):
+        sa = make_sa(automount=False)
+        role = make_role("sa-writer", "ClusterRole", [make_rule(["create"], ["serviceaccounts"])])
+        binding = make_binding(
+            "sa-writer-binding", "ClusterRoleBinding", "sa-writer", "ClusterRole",
+            "my-sa", "default"
+        )
+        result = analyze(sa, bindings=[binding], roles=[role])
+        assert all(f.check_id != "SA-008" for f in result.findings)
+
+    def test_does_not_fire_without_create_verb(self):
+        sa = make_sa(automount=False)
+        role = make_role("token-reader", "ClusterRole", [make_rule(["get"], ["serviceaccounts/token"])])
+        binding = make_binding(
+            "token-reader-binding", "ClusterRoleBinding", "token-reader", "ClusterRole",
+            "my-sa", "default"
+        )
+        result = analyze(sa, bindings=[binding], roles=[role])
+        assert all(f.check_id != "SA-008" for f in result.findings)
+
+    def test_severity_is_high(self):
+        sa = make_sa(automount=False)
+        result = analyze(sa, bindings=[TOKEN_REQUEST_BINDING], roles=[TOKEN_REQUEST_ROLE])
+        finding = next(f for f in result.findings if f.check_id == "SA-008")
+        assert finding.severity == "HIGH"
+
+    def test_weight_is_35(self):
+        assert _CHECK_WEIGHTS["SA-008"] == 35
+
+    def test_detail_mentions_binding_name_and_scope(self):
+        sa = make_sa(automount=False)
+        result = analyze(sa, bindings=[TOKEN_REQUEST_BINDING], roles=[TOKEN_REQUEST_ROLE])
+        finding = next(f for f in result.findings if f.check_id == "SA-008")
+        assert "token-request-binding" in finding.detail
+        assert "cluster-wide" in finding.detail
+
+
+# ===========================================================================
 # Risk score logic
 # ===========================================================================
 
@@ -755,7 +823,7 @@ class TestEdgeCases:
     def test_sa_with_no_bindings_has_no_binding_findings(self):
         sa = make_sa(automount=False)
         result = analyze(sa, bindings=[], roles=[])
-        binding_checks = {"SA-001", "SA-003", "SA-004", "SA-005", "SA-007"}
+        binding_checks = {"SA-001", "SA-003", "SA-004", "SA-005", "SA-007", "SA-008"}
         for f in result.findings:
             assert f.check_id not in binding_checks
 
@@ -840,7 +908,7 @@ class TestEdgeCases:
             "my-sa", "default"
         )
         result = analyze(sa, bindings=[binding], roles=[role])
-        assert all(f.check_id not in {"SA-003", "SA-004"} for f in result.findings)
+        assert all(f.check_id not in {"SA-003", "SA-004", "SA-008"} for f in result.findings)
 
     def test_analyze_many_returns_list_of_same_length(self):
         sas = [make_sa(name=f"sa-{i}", automount=False) for i in range(5)]
@@ -881,11 +949,11 @@ class TestEdgeCases:
         assert isinstance(result.risk_score, int)
 
     def test_all_check_ids_in_check_weights(self):
-        for cid in ("SA-001", "SA-002", "SA-003", "SA-004", "SA-005", "SA-006", "SA-007"):
+        for cid in ("SA-001", "SA-002", "SA-003", "SA-004", "SA-005", "SA-006", "SA-007", "SA-008"):
             assert cid in _CHECK_WEIGHTS
 
     def test_all_check_ids_in_check_severity(self):
-        for cid in ("SA-001", "SA-002", "SA-003", "SA-004", "SA-005", "SA-006", "SA-007"):
+        for cid in ("SA-001", "SA-002", "SA-003", "SA-004", "SA-005", "SA-006", "SA-007", "SA-008"):
             assert cid in _CHECK_SEVERITY
 
     def test_saresult_default_findings_is_empty_list(self):

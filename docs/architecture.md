@@ -225,8 +225,9 @@ checks before rendering a CI-friendly exit code.
 `ServiceAccount`, `RoleBinding`, `ClusterRoleBinding`, `Role`, and
 `ClusterRole` resources. The loader resolves bindings and referenced RBAC rules
 offline, then runs privilege-escalation checks for cluster-admin access,
-wildcard verbs, cluster-wide secrets reads, default ServiceAccount reuse, and
-registry credential exposure before rendering a CI-friendly exit code.
+wildcard verbs, cluster-wide secrets reads, ServiceAccount token minting,
+default ServiceAccount reuse, and registry credential exposure before rendering
+a CI-friendly exit code.
 
 ---
 

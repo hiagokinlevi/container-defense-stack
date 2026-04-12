@@ -448,6 +448,50 @@ def test_scan_serviceaccounts_reports_privileged_bindings(tmp_path: Path) -> Non
     assert "SA-005" in result.output
 
 
+def test_scan_serviceaccounts_reports_token_request_minting_risk(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "serviceaccounts.yaml"
+    manifest_path.write_text(
+        textwrap.dedent(
+            """
+            apiVersion: v1
+            kind: ServiceAccount
+            metadata:
+              name: deployer
+              namespace: prod
+            automountServiceAccountToken: false
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRole
+            metadata:
+              name: token-minter
+            rules:
+              - apiGroups: [""]
+                resources: ["serviceaccounts/token"]
+                verbs: ["create"]
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRoleBinding
+            metadata:
+              name: deployer-token-mint
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: ClusterRole
+              name: token-minter
+            subjects:
+              - kind: ServiceAccount
+                name: deployer
+                namespace: prod
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["scan-serviceaccounts", str(manifest_path)])
+
+    assert result.exit_code == 1
+    assert "SA-008" in result.output
+
+
 def test_scan_serviceaccounts_succeeds_for_scoped_service_account_bundle(tmp_path: Path) -> None:
     manifest_path = tmp_path / "serviceaccounts.yaml"
     manifest_path.write_text(

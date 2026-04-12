@@ -22,6 +22,7 @@ _CHECK_WEIGHTS: Dict[str, int] = {
     "SA-002": 15,  # MEDIUM   — automountServiceAccountToken not explicitly false
     "SA-003": 25,  # HIGH     — wildcard verbs in bound role
     "SA-004": 40,  # CRITICAL — ClusterRole grants secrets read across cluster
+    "SA-008": 35,  # HIGH     — bound role can mint ServiceAccount tokens
     "SA-005": 25,  # HIGH     — default SA bound to non-trivial role
     "SA-006": 15,  # MEDIUM   — imagePullSecrets present (registry creds exposed)
     "SA-007": 20,  # HIGH     — kube-system SA with non-system binding
@@ -33,6 +34,7 @@ _CHECK_SEVERITY: Dict[str, str] = {
     "SA-002": "MEDIUM",
     "SA-003": "HIGH",
     "SA-004": "CRITICAL",
+    "SA-008": "HIGH",
     "SA-005": "HIGH",
     "SA-006": "MEDIUM",
     "SA-007": "HIGH",
@@ -44,6 +46,7 @@ _CHECK_TITLES: Dict[str, str] = {
     "SA-002": "automountServiceAccountToken not explicitly disabled",
     "SA-003": "Bound role contains wildcard verb (*) granting all API actions",
     "SA-004": "ClusterRole grants secrets read/list/get across entire cluster",
+    "SA-008": "Bound role can create service account tokens via TokenRequest",
     "SA-005": "Default ServiceAccount bound to non-trivial role",
     "SA-006": "imagePullSecrets present — registry credentials exposed to pods",
     "SA-007": "kube-system ServiceAccount has non-system binding",
@@ -60,6 +63,8 @@ _DEFAULT_SA_ALLOWED_ROLES = frozenset(
 
 # Verbs that constitute "read" access for SA-004 secrets check
 _SECRETS_READ_VERBS = frozenset({"get", "list", "watch"})
+_TOKEN_REQUEST_CREATE_VERBS = frozenset({"create"})
+_TOKEN_REQUEST_RESOURCES = frozenset({"serviceaccounts/token"})
 _SERVICE_ACCOUNT_KIND = "ServiceAccount"
 _BINDING_KINDS = frozenset({"RoleBinding", "ClusterRoleBinding"})
 _ROLE_KINDS = frozenset({"Role", "ClusterRole"})
@@ -304,6 +309,28 @@ def _check_sa004(sa_bindings: List[SABinding]) -> Optional[SAFinding]:
     return None
 
 
+def _check_sa008(sa_bindings: List[SABinding]) -> Optional[SAFinding]:
+    """SA-008: any bound role can mint new ServiceAccount tokens."""
+    for b in sa_bindings:
+        has_token_create = bool(_TOKEN_REQUEST_CREATE_VERBS.intersection(b.verbs)) or "*" in b.verbs
+        has_token_resource = bool(_TOKEN_REQUEST_RESOURCES.intersection(b.resources)) or "*" in b.resources
+        if not (has_token_create and has_token_resource):
+            continue
+
+        scope = (
+            "cluster-wide"
+            if b.binding_kind == "ClusterRoleBinding"
+            else "within the ServiceAccount namespace"
+        )
+        return _make_finding(
+            "SA-008",
+            f"Binding '{b.binding_name}' (role '{b.role_name}') can create "
+            f"'serviceaccounts/token' requests {scope}, allowing new API tokens "
+            "to be minted for targeted ServiceAccounts.",
+        )
+    return None
+
+
 def _check_sa005(
     sa: dict, sa_bindings: List[SABinding]
 ) -> Optional[SAFinding]:
@@ -404,6 +431,7 @@ def analyze(
         _check_sa002(sa),
         _check_sa003(sa_bindings),
         _check_sa004(sa_bindings),
+        _check_sa008(sa_bindings),
         _check_sa005(sa, sa_bindings),
         _check_sa006(sa),
         _check_sa007(sa, sa_bindings),
