@@ -155,6 +155,20 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
                 remediation="Set securityContext.runAsNonRoot: true and runAsUser to a non-zero UID",
             ))
 
+        run_as_user = sc.get("runAsUser")
+        run_as_user_path = f"{prefix}.securityContext.runAsUser"
+        if run_as_user is None:
+            run_as_user = pod_security_context.get("runAsUser")
+            run_as_user_path = f"{pod_security_context_path}.runAsUser"
+        if run_as_user is not None and str(run_as_user).strip() == "0":
+            findings.append(ManifestFinding(
+                rule_id="SEC004",
+                severity=Severity.HIGH,
+                message=f"Container '{cname}' explicitly runs as UID 0 (root)",
+                path=run_as_user_path,
+                remediation="Set securityContext.runAsUser to a non-zero UID and keep runAsNonRoot: true",
+            ))
+
         caps = sc.get("capabilities", {})
         dropped = caps.get("drop", [])
         if "ALL" not in dropped:

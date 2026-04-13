@@ -98,6 +98,81 @@ def test_secure_manifest_passes(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# SEC004 — non-root execution
+# ---------------------------------------------------------------------------
+def test_run_as_user_zero_flagged(tmp_path: Path) -> None:
+    """SEC004 is raised when a container explicitly runs as UID 0 (root)."""
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: uid-zero
+        spec:
+          template:
+            spec:
+              automountServiceAccountToken: false
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+                - name: app
+                  image: myapp:1.0
+                  securityContext:
+                    privileged: false
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                    runAsUser: 0
+                    capabilities:
+                      drop: [ALL]
+                  resources:
+                    limits:
+                      memory: "256Mi"
+                      cpu: "500m"
+    """)
+    findings = validate_manifest(manifest)
+    assert [f.rule_id for f in findings] == ["SEC004"]
+    assert findings[0].severity == Severity.HIGH
+    assert findings[0].path.endswith(".securityContext.runAsUser")
+
+
+def test_pod_level_run_as_user_zero_flagged(tmp_path: Path) -> None:
+    """SEC004 is raised when the pod security context sets runAsUser: 0."""
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: uid-zero-pod
+        spec:
+          template:
+            spec:
+              automountServiceAccountToken: false
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
+                runAsUser: 0
+              containers:
+                - name: app
+                  image: myapp:1.0
+                  securityContext:
+                    privileged: false
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                    capabilities:
+                      drop: [ALL]
+                  resources:
+                    limits:
+                      memory: "256Mi"
+                      cpu: "500m"
+    """)
+    findings = validate_manifest(manifest)
+    assert [f.rule_id for f in findings] == ["SEC004"]
+    assert findings[0].severity == Severity.HIGH
+    assert findings[0].path.endswith(".securityContext.runAsUser") or findings[0].path.endswith(".runAsUser")
+
+
+# ---------------------------------------------------------------------------
 # SEC009 — missing or unsafe seccomp profile
 # ---------------------------------------------------------------------------
 def test_missing_seccomp_profile_flagged(tmp_path: Path) -> None:
