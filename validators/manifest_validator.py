@@ -204,6 +204,28 @@ def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> Non
                 ),
             ))
 
+        if container_type != "ephemeralContainers":
+            ports = c.get("ports", [])
+            if isinstance(ports, list):
+                for index, port in enumerate(ports):
+                    if not isinstance(port, dict):
+                        continue
+                    host_port = port.get("hostPort")
+                    if isinstance(host_port, int) and host_port > 0:
+                        findings.append(ManifestFinding(
+                            rule_id="SEC015",
+                            severity=Severity.HIGH,
+                            message=(
+                                f"Container '{cname}' exposes hostPort {host_port}"
+                            ),
+                            path=f"{prefix}.ports[{index}].hostPort",
+                            remediation=(
+                                "Remove hostPort and expose the workload via a Service (ClusterIP/NodePort/LoadBalancer) "
+                                "or Ingress. If host-level bindings are unavoidable, constrain access with NetworkPolicy "
+                                "and pin scheduling intentionally."
+                            ),
+                        ))
+
         # Ephemeral containers do not support resources, so limit checks would be noise.
         if container_type == "ephemeralContainers":
             continue

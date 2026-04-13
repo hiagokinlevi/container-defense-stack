@@ -573,3 +573,83 @@ def test_non_hostpath_volume_is_allowed(tmp_path: Path) -> None:
     rule_ids = [f.rule_id for f in findings]
 
     assert "SEC014" not in rule_ids, "Did not expect SEC014 for emptyDir volumes"
+
+
+# ---------------------------------------------------------------------------
+# SEC015 — hostPort exposure
+# ---------------------------------------------------------------------------
+def test_hostport_is_flagged(tmp_path: Path) -> None:
+    """SEC015 is raised when a container binds a hostPort."""
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: hostport
+        spec:
+          template:
+            spec:
+              automountServiceAccountToken: false
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+                - name: app
+                  image: myapp:1.0
+                  ports:
+                    - name: http
+                      containerPort: 8080
+                      hostPort: 8080
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                    capabilities:
+                      drop: [ALL]
+                  resources:
+                    limits:
+                      memory: "256Mi"
+                      cpu: "500m"
+    """)
+    findings = validate_manifest(manifest)
+    by_rule = {f.rule_id: f for f in findings}
+
+    assert "SEC015" in by_rule, "Expected SEC015 for hostPort exposure"
+    assert by_rule["SEC015"].severity == Severity.HIGH
+    assert by_rule["SEC015"].path == "hostport.containers.app.ports[0].hostPort"
+
+
+def test_container_port_without_hostport_is_allowed(tmp_path: Path) -> None:
+    """SEC015 does not fire when only containerPort is set."""
+    manifest = _write_manifest(tmp_path, """\
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: no-hostport
+        spec:
+          template:
+            spec:
+              automountServiceAccountToken: false
+              securityContext:
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+                - name: app
+                  image: myapp:1.0
+                  ports:
+                    - name: http
+                      containerPort: 8080
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                    capabilities:
+                      drop: [ALL]
+                  resources:
+                    limits:
+                      memory: "256Mi"
+                      cpu: "500m"
+    """)
+    findings = validate_manifest(manifest)
+    rule_ids = {f.rule_id for f in findings}
+
+    assert "SEC015" not in rule_ids, "Did not expect SEC015 for containerPort-only"
