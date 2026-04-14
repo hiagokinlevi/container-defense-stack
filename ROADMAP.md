@@ -24,3 +24,6 @@
 - [x] AKS node pool hardening guide
 - [x] EKS managed node group hardening
 - [x] GKE autopilot security baseline
+
+## Automated Completions
+- [x] Add Dockerfile Security Baseline Template (cycle 1)
