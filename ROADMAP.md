@@ -28,3 +28,4 @@
 ## Automated Completions
 - [x] Add Dockerfile Security Baseline Template (cycle 1)
 - [x] Add Minimal Seccomp Profile for Containers (cycle 17)
+- [x] Add Example AppArmor Profile for Containers (cycle 18)
