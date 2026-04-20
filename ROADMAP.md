@@ -30,3 +30,4 @@
 - [x] Add Minimal Seccomp Profile for Containers (cycle 17)
 - [x] Add Example AppArmor Profile for Containers (cycle 18)
 - [x] Add Docker Compose Security Baseline Example (cycle 19)
+- [x] Add Kubernetes Admission Policy Example (Kyverno) (cycle 20)
