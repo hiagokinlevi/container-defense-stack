@@ -1,0 +1,151 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-nonroot-security-context
+  annotations:
+    policies.kyverno.io/title: Require non-root security context
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Enforces that Pods and Pod templates define securityContext settings
+      and run as non-root users.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-pod-security-context
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          Pod spec.securityContext must define runAsNonRoot=true,
+          seccompProfile.type=RuntimeDefault, and fsGroup.
+        pattern:
+          spec:
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+              fsGroup: ">=1"
+
+    - name: require-container-security-context-pod
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          All containers (including initContainers) must set
+          allowPrivilegeEscalation=false, runAsNonRoot=true,
+          readOnlyRootFilesystem=true, and drop ALL capabilities.
+        foreach:
+          - list: "request.object.spec.containers"
+            pattern:
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsNonRoot: true
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+          - list: "request.object.spec.initContainers[]"
+            pattern:
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsNonRoot: true
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+
+    - name: require-pod-template-security-context-controllers
+      match:
+        any:
+          - resources:
+              kinds:
+                - Deployment
+                - StatefulSet
+                - DaemonSet
+                - Job
+                - CronJob
+      validate:
+        message: >-
+          Pod templates must define spec.securityContext with
+          runAsNonRoot=true, seccompProfile.type=RuntimeDefault, and fsGroup.
+        anyPattern:
+          - spec:
+              template:
+                spec:
+                  securityContext:
+                    runAsNonRoot: true
+                    seccompProfile:
+                      type: RuntimeDefault
+                    fsGroup: ">=1"
+          - spec:
+              jobTemplate:
+                spec:
+                  template:
+                    spec:
+                      securityContext:
+                        runAsNonRoot: true
+                        seccompProfile:
+                          type: RuntimeDefault
+                        fsGroup: ">=1"
+
+    - name: require-container-security-context-controllers
+      match:
+        any:
+          - resources:
+              kinds:
+                - Deployment
+                - StatefulSet
+                - DaemonSet
+                - Job
+                - CronJob
+      validate:
+        message: >-
+          All containers in Pod templates (including initContainers) must set
+          allowPrivilegeEscalation=false, runAsNonRoot=true,
+          readOnlyRootFilesystem=true, and drop ALL capabilities.
+        foreach:
+          - list: "request.object.spec.template.spec.containers[]"
+            pattern:
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsNonRoot: true
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+          - list: "request.object.spec.template.spec.initContainers[]"
+            pattern:
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsNonRoot: true
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+          - list: "request.object.spec.jobTemplate.spec.template.spec.containers[]"
+            pattern:
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsNonRoot: true
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+          - list: "request.object.spec.jobTemplate.spec.template.spec.initContainers[]"
+            pattern:
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsNonRoot: true
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
