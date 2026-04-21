@@ -32,3 +32,4 @@
 - [x] Add Docker Compose Security Baseline Example (cycle 19)
 - [x] Add Kubernetes Admission Policy Example (Kyverno) (cycle 20)
 - [x] Add Container Runtime Capability Drop List (cycle 21)
+- [x] Add .dockerignore Security Template (cycle 22)
