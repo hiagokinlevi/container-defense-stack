@@ -1,0 +1,55 @@
+name: Container Security Checks
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  validate-security-artifacts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install project with dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Validate Dockerfiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t dockerfiles < <(find docker -type f \( -iname 'Dockerfile' -o -iname '*.Dockerfile' -o -iname 'Dockerfile.*' \))
+
+          if [ ${#dockerfiles[@]} -eq 0 ]; then
+            echo "No Dockerfiles found under docker/; skipping Dockerfile validation."
+            exit 0
+          fi
+
+          for file in "${dockerfiles[@]}"; do
+            echo "Validating Dockerfile: $file"
+            k1n-container-guard validate-dockerfile "$file"
+          done
+
+      - name: Validate Kubernetes manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t manifests < <(find kubernetes -type f \( -iname '*.yml' -o -iname '*.yaml' \))
+
+          if [ ${#manifests[@]} -eq 0 ]; then
+            echo "No Kubernetes manifests found under kubernetes/; skipping manifest validation."
+            exit 0
+          fi
+
+          for file in "${manifests[@]}"; do
+            echo "Validating manifest: $file"
+            k1n-container-guard validate-manifest "$file"
+          done
