@@ -33,3 +33,4 @@
 - [x] Add Kubernetes Admission Policy Example (Kyverno) (cycle 20)
 - [x] Add Container Runtime Capability Drop List (cycle 21)
 - [x] Add .dockerignore Security Template (cycle 22)
+- [x] Add Pre-Commit Hook for Container Security Checks (cycle 23)
