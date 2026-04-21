@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "$ROOT_DIR"
+
+# Gather staged files (added/copied/modified/renamed/type-changed)
+mapfile -t STAGED_FILES < <(git diff --cached --name-only --diff-filter=ACMRT)
+
+if [ ${#STAGED_FILES[@]} -eq 0 ]; then
+  exit 0
+fi
+
+needs_image_scan=false
+needs_manifest_scan=false
+
+for file in "${STAGED_FILES[@]}"; do
+  case "$file" in
+    Dockerfile|Dockerfile.*|docker/*|docker/**/*|.dockerignore)
+      needs_image_scan=true
+      ;;
+  esac
+
+  case "$file" in
+    *.yaml|*.yml|kubernetes/*|kubernetes/**/*|policies/*|policies/**/*|templates/*|templates/**/*)
+      needs_manifest_scan=true
+      ;;
+  esac
+
+done
+
+run_script_if_present() {
+  local script_path="$1"
+  if [ ! -f "$script_path" ]; then
+    return 1
+  fi
+
+  if [ -x "$script_path" ]; then
+    "$script_path"
+  else
+    bash "$script_path"
+  fi
+}
+
+if [ "$needs_image_scan" = true ]; then
+  echo "[pre-commit] Running container image scan..."
+  if ! run_script_if_present "$ROOT_DIR/scripts/scan-container-image.sh"; then
+    echo "[pre-commit] Container image scan failed. Commit blocked."
+    exit 1
+  fi
+fi
+
+if [ "$needs_manifest_scan" = true ]; then
+  echo "[pre-commit] Running Kubernetes manifest scan..."
+  if ! run_script_if_present "$ROOT_DIR/scripts/scan-k8s-manifests.sh"; then
+    echo "[pre-commit] Kubernetes manifest scan failed. Commit blocked."
+    exit 1
+  fi
+fi
+
+exit 0
