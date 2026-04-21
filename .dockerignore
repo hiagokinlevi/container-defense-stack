@@ -1,0 +1,109 @@
+# Hardened Docker build context exclusions
+# Goal: prevent secret leakage and reduce attack surface / image bloat.
+
+# --- VCS metadata ---
+.git
+.gitignore
+.gitattributes
+.github/
+
+# --- Environment and secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.jks
+*.keystore
+*.kubeconfig
+kubeconfig
+
+# Common secret/config files
+secrets/
+secret/
+*.secret
+*.secrets
+
+# --- SSH and GPG material ---
+.ssh/
+**/id_rsa
+**/id_rsa.pub
+**/id_ecdsa
+**/id_ecdsa.pub
+**/id_ed25519
+**/id_ed25519.pub
+.gnupg/
+*.asc
+
+# --- Cloud / CLI credentials ---
+.aws/
+.azure/
+.gcloud/
+.config/gcloud/
+
+# --- Python artifacts ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.pyre/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Build / packaging outputs ---
+build/
+dist/
+*.egg-info/
+*.whl
+pip-wheel-metadata/
+
+# --- Node / frontend artifacts (if present) ---
+node_modules/
+.npm/
+.yarn/
+.pnpm-store/
+.next/
+out/
+coverage/
+
+# --- Go / Rust / Java generic build outputs ---
+bin/
+target/
+*.class
+
+# --- IDE / editor / OS junk ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Logs / temp files ---
+*.log
+*.tmp
+*.temp
+tmp/
+
+# --- Local tooling / caches ---
+.cache/
+
+# --- Tests and training data (not required in runtime images) ---
+tests/
+training/
