@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: namespace-default-security-quota
+  namespace: default
+  labels:
+    app.kubernetes.io/name: container-defense-stack
+    app.kubernetes.io/component: security-baseline
+    app.kubernetes.io/part-of: kubernetes
+spec:
+  hard:
+    # Aggregate namespace CPU/memory requests (scheduler guarantees)
+    requests.cpu: "4"
+    requests.memory: 8Gi
+
+    # Aggregate namespace CPU/memory limits (runtime ceiling)
+    limits.cpu: "8"
+    limits.memory: 16Gi
+
+    # Workload count cap to reduce noisy-neighbor and DoS blast radius
+    pods: "50"
+
+    # Object count caps to limit control-plane pressure and abuse
+    services: "10"
+    configmaps: "30"
+    secrets: "50"
+    persistentvolumeclaims: "10"
