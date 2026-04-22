@@ -35,3 +35,4 @@
 - [x] Add .dockerignore Security Template (cycle 22)
 - [x] Add Pre-Commit Hook for Container Security Checks (cycle 23)
 - [x] Add GitHub Actions Workflow for Manifest and Dockerfile Security Validation (cycle 24)
+- [x] Add Kubernetes CronJob Hardened Manifest Template (cycle 25)
