@@ -1,0 +1,35 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: <app-name>-pdb
+  namespace: <namespace>
+  labels:
+    app.kubernetes.io/name: <app-name>
+    app.kubernetes.io/component: web
+    security.container-defense-stack/baseline: availability
+spec:
+  # Safe default for stateless workloads:
+  # keep at least one pod available during voluntary disruptions
+  # such as node drains, rolling node upgrades, and cluster maintenance.
+  #
+  # Tune this based on replica count and SLOs:
+  # - replicas=2  -> minAvailable: 1 (recommended)
+  # - replicas>=3 -> consider minAvailable: 2 for stricter availability
+  minAvailable: 1
+
+  # Use exactly one of minAvailable or maxUnavailable.
+  # Example alternative for larger stateless fleets:
+  # maxUnavailable: 25%
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: <app-name>
+      app.kubernetes.io/component: web
+
+---
+# Usage note:
+# 1) Ensure your Deployment/ReplicaSet uses the same selector labels.
+# 2) Keep replicas >= minAvailable, otherwise voluntary evictions will be blocked.
+# 3) In hardened production clusters, this baseline reduces downtime risk during
+#    node drains and managed Kubernetes upgrade operations by preventing too many
+#    pods from being evicted at once.
