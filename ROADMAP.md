@@ -38,3 +38,4 @@
 - [x] Add Kubernetes CronJob Hardened Manifest Template (cycle 25)
 - [x] Add Namespace Default ResourceQuota Security Baseline (cycle 26)
 - [x] Add Namespace LimitRange Baseline for Safe Defaults (cycle 27)
+- [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
