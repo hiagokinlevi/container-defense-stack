@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add Restricted Pod Security Standard Namespace Template (cycle 31)
+- [x] Add Kubernetes Secret Hardening Validator Rule (SEC016) (cycle 32)
