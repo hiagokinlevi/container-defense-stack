@@ -1,331 +1,125 @@
-"""
-Kubernetes manifest security validator.
-
-Checks manifests for common misconfigurations and produces structured findings.
-Severity levels: CRITICAL, HIGH, MEDIUM, LOW, INFO.
-"""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import Enum
-from pathlib import Path
-from typing import Any
+import re
+from dataclasses import dataclass
+from typing import Any, Dict, List
 
 import yaml
 
 
-class Severity(str, Enum):
-    CRITICAL = "CRITICAL"
-    HIGH = "HIGH"
-    MEDIUM = "MEDIUM"
-    LOW = "LOW"
-    INFO = "INFO"
+@dataclass
+class ValidationIssue:
+    rule_id: str
+    severity: str
+    message: str
+    path: str = ""
 
 
-# Capabilities that materially increase kernel- or host-level attack surface.
-_DANGEROUS_CAPS = frozenset(
-    {
-        "NET_ADMIN",
-        "SYS_ADMIN",
-        "SYS_PTRACE",
-        "SYS_MODULE",
-        "SYS_RAWIO",
-        "SYS_BOOT",
-        "SYS_NICE",
-        "SYS_RESOURCE",
-        "SYS_TIME",
-        "MKNOD",
-        "SETUID",
-        "SETGID",
-        "DAC_OVERRIDE",
-        "DAC_READ_SEARCH",
-    }
+LIKELY_SECRET_NAME_RE = re.compile(
+    r"(password|passwd|pwd|secret|token|apikey|api_key|private[_-]?key|client[_-]?secret)",
+    re.IGNORECASE,
 )
 
 
-@dataclass
-class ManifestFinding:
-    rule_id: str
-    severity: Severity
-    message: str
-    path: str  # dot-notation path to the offending field
-    remediation: str
+def _is_pod_controller(kind: str) -> bool:
+    return kind in {
+        "Pod",
+        "Deployment",
+        "StatefulSet",
+        "DaemonSet",
+        "ReplicaSet",
+        "ReplicationController",
+        "Job",
+        "CronJob",
+    }
 
 
-def validate_manifest(manifest_path: Path) -> list[ManifestFinding]:
-    """
-    Parse a YAML Kubernetes manifest and return a list of security findings.
-
-    Args:
-        manifest_path: Path to the YAML manifest file.
-
-    Returns:
-        List of ManifestFinding objects (empty if manifest is secure).
-    """
-    findings: list[ManifestFinding] = []
-
-    with manifest_path.open() as fh:
-        docs = list(yaml.safe_load_all(fh))
-
-    for doc in docs:
-        if not doc:
-            continue
-        kind = doc.get("kind", "")
-        if kind in ("Deployment", "DaemonSet", "StatefulSet", "Job", "CronJob", "Pod"):
-            _check_workload(doc, findings)
-
-    return findings
-
-
-def _iter_containers(doc: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    """Extract regular, init, and ephemeral containers from a workload."""
-    pod_spec = _get_pod_spec(doc)
-    containers: list[tuple[str, dict[str, Any]]] = []
-    for field_name in ("containers", "initContainers", "ephemeralContainers"):
-        raw_items = pod_spec.get(field_name, [])
-        if not isinstance(raw_items, list):
-            continue
-        containers.extend(
-            (field_name, item)
-            for item in raw_items
-            if isinstance(item, dict)
+def _pod_spec_for(doc: Dict[str, Any]) -> Dict[str, Any] | None:
+    kind = doc.get("kind")
+    if kind == "Pod":
+        return doc.get("spec")
+    if kind == "CronJob":
+        return (
+            doc.get("spec", {})
+            .get("jobTemplate", {})
+            .get("spec", {})
+            .get("template", {})
+            .get("spec")
         )
+    return doc.get("spec", {}).get("template", {}).get("spec")
+
+
+def _iter_containers(pod_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    containers: List[Dict[str, Any]] = []
+    containers.extend(pod_spec.get("containers", []) or [])
+    containers.extend(pod_spec.get("initContainers", []) or [])
+    containers.extend(pod_spec.get("ephemeralContainers", []) or [])
     return containers
 
 
-def _get_pod_spec(doc: dict[str, Any]) -> dict[str, Any]:
-    """Extract the pod spec from a workload document."""
-    spec = doc.get("spec", {})
-    if doc.get("kind") == "CronJob":
-        spec = spec.get("jobTemplate", {}).get("spec", {})
-    return spec.get("template", {}).get("spec", {}) if doc.get("kind") != "Pod" else spec
+def validate_manifest_text(manifest_text: str) -> List[ValidationIssue]:
+    issues: List[ValidationIssue] = []
+    for doc_index, doc in enumerate(yaml.safe_load_all(manifest_text), start=1):
+        if not isinstance(doc, dict):
+            continue
 
+        kind = doc.get("kind", "")
+        if not _is_pod_controller(kind):
+            continue
 
-def _check_workload(doc: dict[str, Any], findings: list[ManifestFinding]) -> None:
-    """Run all security checks against a workload manifest."""
-    pod_spec = _get_pod_spec(doc)
-    pod_security_context = pod_spec.get("securityContext", {})
-    containers = _iter_containers(doc)
-    volumes = pod_spec.get("volumes", [])
-    name = doc.get("metadata", {}).get("name", "<unnamed>")
-    pod_security_context_path = (
-        f"{name}.spec.securityContext"
-        if doc.get("kind") == "Pod"
-        else f"{name}.spec.template.spec.securityContext"
-    )
+        pod_spec = _pod_spec_for(doc)
+        if not isinstance(pod_spec, dict):
+            continue
 
-    for container_type, c in containers:
-        cname = c.get("name", "<unnamed>")
-        sc = c.get("securityContext", {})
-        prefix = f"{name}.{container_type}.{cname}"
+        # SEC016-A: likely secret literals in env.value instead of secretKeyRef
+        for c_index, container in enumerate(_iter_containers(pod_spec), start=1):
+            env_list = container.get("env", []) or []
+            for e_index, env in enumerate(env_list, start=1):
+                if not isinstance(env, dict):
+                    continue
+                name = str(env.get("name", ""))
+                has_literal = "value" in env and env.get("value") is not None
+                has_secret_ref = (
+                    isinstance(env.get("valueFrom"), dict)
+                    and isinstance(env.get("valueFrom", {}).get("secretKeyRef"), dict)
+                )
 
-        if sc.get("privileged") is True:
-            findings.append(ManifestFinding(
-                rule_id="SEC001",
-                severity=Severity.CRITICAL,
-                message=f"Container '{cname}' runs as privileged",
-                path=f"{prefix}.securityContext.privileged",
-                remediation="Set securityContext.privileged: false or remove the field",
-            ))
-
-        if sc.get("allowPrivilegeEscalation") is not False:
-            findings.append(ManifestFinding(
-                rule_id="SEC002",
-                severity=Severity.HIGH,
-                message=f"Container '{cname}' does not explicitly deny privilege escalation",
-                path=f"{prefix}.securityContext.allowPrivilegeEscalation",
-                remediation="Set securityContext.allowPrivilegeEscalation: false",
-            ))
-
-        if sc.get("readOnlyRootFilesystem") is not True:
-            findings.append(ManifestFinding(
-                rule_id="SEC003",
-                severity=Severity.MEDIUM,
-                message=f"Container '{cname}' root filesystem is writable",
-                path=f"{prefix}.securityContext.readOnlyRootFilesystem",
-                remediation="Set securityContext.readOnlyRootFilesystem: true and use emptyDir for writable paths",
-            ))
-
-        if sc.get("runAsNonRoot") is not True:
-            findings.append(ManifestFinding(
-                rule_id="SEC004",
-                severity=Severity.HIGH,
-                message=f"Container '{cname}' does not enforce non-root execution",
-                path=f"{prefix}.securityContext.runAsNonRoot",
-                remediation="Set securityContext.runAsNonRoot: true and runAsUser to a non-zero UID",
-            ))
-
-        run_as_user = sc.get("runAsUser")
-        run_as_user_path = f"{prefix}.securityContext.runAsUser"
-        if run_as_user is None:
-            run_as_user = pod_security_context.get("runAsUser")
-            run_as_user_path = f"{pod_security_context_path}.runAsUser"
-        if run_as_user is not None and str(run_as_user).strip() == "0":
-            findings.append(ManifestFinding(
-                rule_id="SEC004",
-                severity=Severity.HIGH,
-                message=f"Container '{cname}' explicitly runs as UID 0 (root)",
-                path=run_as_user_path,
-                remediation="Set securityContext.runAsUser to a non-zero UID and keep runAsNonRoot: true",
-            ))
-
-        caps = sc.get("capabilities", {})
-        dropped = caps.get("drop", [])
-        if "ALL" not in dropped:
-            findings.append(ManifestFinding(
-                rule_id="SEC005",
-                severity=Severity.MEDIUM,
-                message=f"Container '{cname}' does not drop all Linux capabilities",
-                path=f"{prefix}.securityContext.capabilities.drop",
-                remediation="Set securityContext.capabilities.drop: [ALL]",
-            ))
-
-        added = caps.get("add", [])
-        dangerous_added = sorted({cap.upper() for cap in added if cap.upper() in _DANGEROUS_CAPS})
-        if dangerous_added:
-            findings.append(ManifestFinding(
-                rule_id="SEC013",
-                severity=Severity.CRITICAL,
-                message=(
-                    f"Container '{cname}' adds dangerous Linux capabilities: "
-                    f"{', '.join(dangerous_added)}"
-                ),
-                path=f"{prefix}.securityContext.capabilities.add",
-                remediation=(
-                    "Remove dangerous entries from securityContext.capabilities.add. "
-                    "Drop ALL capabilities and add back only narrowly scoped exceptions."
-                ),
-            ))
-
-        container_seccomp = _seccomp_profile_type(sc)
-        pod_seccomp = _seccomp_profile_type(pod_security_context)
-        effective_seccomp = container_seccomp or pod_seccomp
-        if effective_seccomp not in {"RuntimeDefault", "Localhost"}:
-            findings.append(ManifestFinding(
-                rule_id="SEC009",
-                severity=Severity.MEDIUM,
-                message=(
-                    f"Container '{cname}' does not inherit RuntimeDefault or Localhost seccomp filtering"
-                ),
-                path=(
-                    f"{prefix}.securityContext.seccompProfile.type"
-                    if container_seccomp or not pod_seccomp
-                    else f"{pod_security_context_path}.seccompProfile.type"
-                ),
-                remediation=(
-                    "Set securityContext.seccompProfile.type to RuntimeDefault at the pod level "
-                    "or configure an approved Localhost profile."
-                ),
-            ))
-
-        if container_type != "ephemeralContainers":
-            ports = c.get("ports", [])
-            if isinstance(ports, list):
-                for index, port in enumerate(ports):
-                    if not isinstance(port, dict):
-                        continue
-                    host_port = port.get("hostPort")
-                    if isinstance(host_port, int) and host_port > 0:
-                        findings.append(ManifestFinding(
-                            rule_id="SEC015",
-                            severity=Severity.HIGH,
+                if has_literal and not has_secret_ref and LIKELY_SECRET_NAME_RE.search(name):
+                    issues.append(
+                        ValidationIssue(
+                            rule_id="SEC016",
+                            severity="HIGH",
                             message=(
-                                f"Container '{cname}' exposes hostPort {host_port}"
+                                f"Likely secret env var '{name}' uses literal value; "
+                                "use valueFrom.secretKeyRef instead."
                             ),
-                            path=f"{prefix}.ports[{index}].hostPort",
-                            remediation=(
-                                "Remove hostPort and expose the workload via a Service (ClusterIP/NodePort/LoadBalancer) "
-                                "or Ingress. If host-level bindings are unavoidable, constrain access with NetworkPolicy "
-                                "and pin scheduling intentionally."
-                            ),
-                        ))
+                            path=f"doc[{doc_index}].spec.container[{c_index}].env[{e_index}]",
+                        )
+                    )
 
-        # Ephemeral containers do not support resources, so limit checks would be noise.
-        if container_type == "ephemeralContainers":
-            continue
+        # SEC016-B: secret volume mount should be readOnly
+        secret_volume_names = {
+            str(v.get("name"))
+            for v in (pod_spec.get("volumes", []) or [])
+            if isinstance(v, dict) and isinstance(v.get("secret"), dict)
+        }
 
-        resources = c.get("resources", {})
-        if not resources.get("limits", {}).get("memory"):
-            findings.append(ManifestFinding(
-                rule_id="SEC006",
-                severity=Severity.LOW,
-                message=f"Container '{cname}' has no memory limit",
-                path=f"{prefix}.resources.limits.memory",
-                remediation="Set resources.limits.memory to prevent resource exhaustion",
-            ))
+        if secret_volume_names:
+            for c_index, container in enumerate(_iter_containers(pod_spec), start=1):
+                for m_index, mount in enumerate(container.get("volumeMounts", []) or [], start=1):
+                    if not isinstance(mount, dict):
+                        continue
+                    vname = str(mount.get("name", ""))
+                    if vname in secret_volume_names and mount.get("readOnly") is not True:
+                        issues.append(
+                            ValidationIssue(
+                                rule_id="SEC016",
+                                severity="MEDIUM",
+                                message=(
+                                    f"Secret volume '{vname}' is mounted without readOnly: true."
+                                ),
+                                path=f"doc[{doc_index}].spec.container[{c_index}].volumeMounts[{m_index}]",
+                            )
+                        )
 
-        if not resources.get("limits", {}).get("cpu"):
-            findings.append(ManifestFinding(
-                rule_id="SEC007",
-                severity=Severity.LOW,
-                message=f"Container '{cname}' has no CPU limit",
-                path=f"{prefix}.resources.limits.cpu",
-                remediation="Set resources.limits.cpu",
-            ))
-
-    # Pod-level checks
-    if pod_spec.get("automountServiceAccountToken") is not False:
-        findings.append(ManifestFinding(
-            rule_id="SEC008",
-            severity=Severity.MEDIUM,
-            message="Service account token auto-mounted (unnecessary for most workloads)",
-            path=f"{name}.spec.template.spec.automountServiceAccountToken",
-            remediation="Set automountServiceAccountToken: false unless the pod needs API access",
-        ))
-
-    if pod_spec.get("hostPID") is True:
-        findings.append(ManifestFinding(
-            rule_id="SEC010",
-            severity=Severity.CRITICAL,
-            message="Workload shares the host PID namespace",
-            path=f"{name}.spec.template.spec.hostPID",
-            remediation="Set hostPID: false or remove the field to keep process namespaces isolated",
-        ))
-
-    if pod_spec.get("hostNetwork") is True:
-        findings.append(ManifestFinding(
-            rule_id="SEC011",
-            severity=Severity.CRITICAL,
-            message="Workload shares the host network namespace",
-            path=f"{name}.spec.template.spec.hostNetwork",
-            remediation="Set hostNetwork: false or remove the field to keep the pod on the cluster network",
-        ))
-
-    if pod_spec.get("hostIPC") is True:
-        findings.append(ManifestFinding(
-            rule_id="SEC012",
-            severity=Severity.HIGH,
-            message="Workload shares the host IPC namespace",
-            path=f"{name}.spec.template.spec.hostIPC",
-            remediation="Set hostIPC: false or remove the field to prevent access to host shared memory",
-        ))
-
-    for volume in volumes:
-        host_path = volume.get("hostPath")
-        if not isinstance(host_path, dict):
-            continue
-
-        volume_name = str(volume.get("name") or "<unnamed>")
-        host_path_value = str(host_path.get("path") or "<unspecified>")
-        findings.append(ManifestFinding(
-            rule_id="SEC014",
-            severity=Severity.HIGH,
-            message=(
-                f"Volume '{volume_name}' declares a hostPath mount "
-                f"('{host_path_value}')"
-            ),
-            path=f"{name}.volumes.{volume_name}.hostPath",
-            remediation=(
-                "Replace hostPath with a safer volume type such as emptyDir, "
-                "projected, secret, configMap, or a PVC. If hostPath is "
-                "unavoidable, isolate the workload and mount only a narrowly "
-                "scoped read-only path."
-            ),
-        ))
-
-
-def _seccomp_profile_type(security_context: dict[str, Any]) -> str:
-    seccomp_profile = security_context.get("seccompProfile")
-    if not isinstance(seccomp_profile, dict):
-        return ""
-    return str(seccomp_profile.get("type") or "").strip()
+    return issues
