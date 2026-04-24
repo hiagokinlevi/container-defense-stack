@@ -40,4 +40,5 @@
 - [x] Add Namespace LimitRange Baseline for Safe Defaults (cycle 27)
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
-- [x] Add PodDisruptionBudget Security Baseline Template (cycle 30)
+- [x] Add PodDisruptionBud
+- [x] Add Restricted Pod Security Standard Namespace Template (cycle 31)
