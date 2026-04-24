@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add Kubernetes Secret Hardening Validator Rule (SEC016) (cycle 32)
+- [x] Add SEC017 Validator Rule for hostPath Volume Usage Restriction (cycle 33)
