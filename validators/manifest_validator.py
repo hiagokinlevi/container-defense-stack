@@ -1,125 +1,147 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import yaml
 
 
 @dataclass
-class ValidationIssue:
+class Finding:
     rule_id: str
-    severity: str
     message: str
-    path: str = ""
+    severity: str = "high"
+    resource: Optional[str] = None
 
 
-LIKELY_SECRET_NAME_RE = re.compile(
-    r"(password|passwd|pwd|secret|token|apikey|api_key|private[_-]?key|client[_-]?secret)",
-    re.IGNORECASE,
-)
+def _as_list(value: Any) -> List[Any]:
+    if isinstance(value, list):
+        return value
+    return []
 
 
-def _is_pod_controller(kind: str) -> bool:
-    return kind in {
-        "Pod",
-        "Deployment",
-        "StatefulSet",
-        "DaemonSet",
-        "ReplicaSet",
-        "ReplicationController",
-        "Job",
-        "CronJob",
-    }
+def _iter_containers(spec: Dict[str, Any]) -> Iterable[Tuple[str, Dict[str, Any]]]:
+    for section in ("containers", "initContainers", "ephemeralContainers"):
+        for c in _as_list(spec.get(section)):
+            if isinstance(c, dict):
+                yield section, c
 
 
-def _pod_spec_for(doc: Dict[str, Any]) -> Dict[str, Any] | None:
-    kind = doc.get("kind")
-    if kind == "Pod":
-        return doc.get("spec")
-    if kind == "CronJob":
-        return (
-            doc.get("spec", {})
-            .get("jobTemplate", {})
-            .get("spec", {})
-            .get("template", {})
-            .get("spec")
-        )
-    return doc.get("spec", {}).get("template", {}).get("spec")
+def _extract_pod_spec(doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    kind = str(doc.get("kind", ""))
+    spec = doc.get("spec")
+    if not isinstance(spec, dict):
+        return None
+
+    if kind in {"Pod"}:
+        return spec
+
+    template = spec.get("template")
+    if isinstance(template, dict):
+        t_spec = template.get("spec")
+        if isinstance(t_spec, dict):
+            return t_spec
+
+    job_template = spec.get("jobTemplate")
+    if isinstance(job_template, dict):
+        jt_spec = job_template.get("spec")
+        if isinstance(jt_spec, dict):
+            jt_template = jt_spec.get("template")
+            if isinstance(jt_template, dict):
+                jt_t_spec = jt_template.get("spec")
+                if isinstance(jt_t_spec, dict):
+                    return jt_t_spec
+
+    return None
 
 
-def _iter_containers(pod_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    containers: List[Dict[str, Any]] = []
-    containers.extend(pod_spec.get("containers", []) or [])
-    containers.extend(pod_spec.get("initContainers", []) or [])
-    containers.extend(pod_spec.get("ephemeralContainers", []) or [])
-    return containers
+def _is_digest_pinned(image: str) -> bool:
+    return "@sha256:" in image
 
 
-def validate_manifest_text(manifest_text: str) -> List[ValidationIssue]:
-    issues: List[ValidationIssue] = []
-    for doc_index, doc in enumerate(yaml.safe_load_all(manifest_text), start=1):
+def _has_explicit_tag(image: str) -> bool:
+    # If digest pinned, treat as immutable and valid.
+    if _is_digest_pinned(image):
+        return True
+
+    # Strip registry/repository path and inspect final component.
+    last = image.rsplit("/", 1)[-1]
+    return ":" in last
+
+
+def _tag_of(image: str) -> Optional[str]:
+    if _is_digest_pinned(image):
+        return None
+    last = image.rsplit("/", 1)[-1]
+    if ":" not in last:
+        return None
+    return last.rsplit(":", 1)[-1]
+
+
+def _validate_sec018(doc: Dict[str, Any]) -> List[Finding]:
+    findings: List[Finding] = []
+    pod_spec = _extract_pod_spec(doc)
+    if not pod_spec:
+        return findings
+
+    meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    resource_name = meta.get("name") if isinstance(meta, dict) else None
+
+    for section, container in _iter_containers(pod_spec):
+        image = container.get("image")
+        name = container.get("name", "<unnamed>")
+        if not isinstance(image, str) or not image.strip():
+            continue
+
+        image = image.strip()
+
+        if _is_digest_pinned(image):
+            continue
+
+        if not _has_explicit_tag(image):
+            findings.append(
+                Finding(
+                    rule_id="SEC018",
+                    message=(
+                        f"{section}.{name} uses image '{image}' without an explicit immutable tag; "
+                        "use a fixed version tag or digest pin (@sha256:...)."
+                    ),
+                    severity="high",
+                    resource=resource_name,
+                )
+            )
+            continue
+
+        tag = _tag_of(image)
+        if tag and tag.lower() == "latest":
+            findings.append(
+                Finding(
+                    rule_id="SEC018",
+                    message=(
+                        f"{section}.{name} uses mutable image tag ':latest' in '{image}'; "
+                        "use a fixed version tag or digest pin (@sha256:...)."
+                    ),
+                    severity="high",
+                    resource=resource_name,
+                )
+            )
+
+    return findings
+
+
+def validate_manifest(content: str) -> List[Dict[str, Any]]:
+    findings: List[Finding] = []
+    for doc in yaml.safe_load_all(content):
         if not isinstance(doc, dict):
             continue
+        findings.extend(_validate_sec018(doc))
 
-        kind = doc.get("kind", "")
-        if not _is_pod_controller(kind):
-            continue
-
-        pod_spec = _pod_spec_for(doc)
-        if not isinstance(pod_spec, dict):
-            continue
-
-        # SEC016-A: likely secret literals in env.value instead of secretKeyRef
-        for c_index, container in enumerate(_iter_containers(pod_spec), start=1):
-            env_list = container.get("env", []) or []
-            for e_index, env in enumerate(env_list, start=1):
-                if not isinstance(env, dict):
-                    continue
-                name = str(env.get("name", ""))
-                has_literal = "value" in env and env.get("value") is not None
-                has_secret_ref = (
-                    isinstance(env.get("valueFrom"), dict)
-                    and isinstance(env.get("valueFrom", {}).get("secretKeyRef"), dict)
-                )
-
-                if has_literal and not has_secret_ref and LIKELY_SECRET_NAME_RE.search(name):
-                    issues.append(
-                        ValidationIssue(
-                            rule_id="SEC016",
-                            severity="HIGH",
-                            message=(
-                                f"Likely secret env var '{name}' uses literal value; "
-                                "use valueFrom.secretKeyRef instead."
-                            ),
-                            path=f"doc[{doc_index}].spec.container[{c_index}].env[{e_index}]",
-                        )
-                    )
-
-        # SEC016-B: secret volume mount should be readOnly
-        secret_volume_names = {
-            str(v.get("name"))
-            for v in (pod_spec.get("volumes", []) or [])
-            if isinstance(v, dict) and isinstance(v.get("secret"), dict)
+    return [
+        {
+            "rule_id": f.rule_id,
+            "message": f.message,
+            "severity": f.severity,
+            "resource": f.resource,
         }
-
-        if secret_volume_names:
-            for c_index, container in enumerate(_iter_containers(pod_spec), start=1):
-                for m_index, mount in enumerate(container.get("volumeMounts", []) or [], start=1):
-                    if not isinstance(mount, dict):
-                        continue
-                    vname = str(mount.get("name", ""))
-                    if vname in secret_volume_names and mount.get("readOnly") is not True:
-                        issues.append(
-                            ValidationIssue(
-                                rule_id="SEC016",
-                                severity="MEDIUM",
-                                message=(
-                                    f"Secret volume '{vname}' is mounted without readOnly: true."
-                                ),
-                                path=f"doc[{doc_index}].spec.container[{c_index}].volumeMounts[{m_index}]",
-                            )
-                        )
-
-    return issues
+        for f in findings
+    ]
