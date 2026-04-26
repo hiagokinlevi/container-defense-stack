@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add SEC022 Validator Rule for Missing readOnlyRootFilesystem in Pod/Container SecurityContext (cycle 38)
+- [x] Add SEC023 Validator Rule for Missing Resource Requests/Limits (cycle 39)
