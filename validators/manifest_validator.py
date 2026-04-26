@@ -1,147 +1,78 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
-
-import yaml
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass
 class Finding:
     rule_id: str
+    severity: str
     message: str
-    severity: str = "high"
-    resource: Optional[str] = None
+    kind: str
+    name: str
 
 
-def _as_list(value: Any) -> List[Any]:
-    if isinstance(value, list):
-        return value
-    return []
+RULES: Dict[str, Dict[str, str]] = {
+    "SEC023": {
+        "severity": "HIGH",
+        "title": "Containers must define CPU/memory requests and limits",
+    }
+}
 
 
-def _iter_containers(spec: Dict[str, Any]) -> Iterable[Tuple[str, Dict[str, Any]]]:
-    for section in ("containers", "initContainers", "ephemeralContainers"):
-        for c in _as_list(spec.get(section)):
-            if isinstance(c, dict):
-                yield section, c
+class ManifestValidator:
+    def __init__(self) -> None:
+        self.findings: List[Finding] = []
 
+    def validate(self, manifest: Dict[str, Any]) -> List[Finding]:
+        self.findings = []
+        self._check_sec023_resources_required(manifest)
+        return self.findings
 
-def _extract_pod_spec(doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    kind = str(doc.get("kind", ""))
-    spec = doc.get("spec")
-    if not isinstance(spec, dict):
+    def _pod_spec_for_kind(self, manifest: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        kind = (manifest.get("kind") or "").lower()
+        spec = manifest.get("spec") or {}
+
+        if kind in {"deployment", "statefulset", "daemonset", "job"}:
+            return ((spec.get("template") or {}).get("spec")) or {}
+        if kind == "cronjob":
+            return ((((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec")) or {}
+        if kind == "pod":
+            return spec or {}
         return None
 
-    if kind in {"Pod"}:
-        return spec
+    def _check_sec023_resources_required(self, manifest: Dict[str, Any]) -> None:
+        pod_spec = self._pod_spec_for_kind(manifest)
+        if pod_spec is None:
+            return
 
-    template = spec.get("template")
-    if isinstance(template, dict):
-        t_spec = template.get("spec")
-        if isinstance(t_spec, dict):
-            return t_spec
+        kind = manifest.get("kind", "Unknown")
+        name = ((manifest.get("metadata") or {}).get("name")) or "unknown"
 
-    job_template = spec.get("jobTemplate")
-    if isinstance(job_template, dict):
-        jt_spec = job_template.get("spec")
-        if isinstance(jt_spec, dict):
-            jt_template = jt_spec.get("template")
-            if isinstance(jt_template, dict):
-                jt_t_spec = jt_template.get("spec")
-                if isinstance(jt_t_spec, dict):
-                    return jt_t_spec
+        for c in pod_spec.get("containers") or []:
+            cname = c.get("name") or "unnamed"
+            resources = c.get("resources") or {}
+            requests = resources.get("requests") or {}
+            limits = resources.get("limits") or {}
 
-    return None
+            missing: List[str] = []
+            if "cpu" not in requests:
+                missing.append("requests.cpu")
+            if "memory" not in requests:
+                missing.append("requests.memory")
+            if "cpu" not in limits:
+                missing.append("limits.cpu")
+            if "memory" not in limits:
+                missing.append("limits.memory")
 
-
-def _is_digest_pinned(image: str) -> bool:
-    return "@sha256:" in image
-
-
-def _has_explicit_tag(image: str) -> bool:
-    # If digest pinned, treat as immutable and valid.
-    if _is_digest_pinned(image):
-        return True
-
-    # Strip registry/repository path and inspect final component.
-    last = image.rsplit("/", 1)[-1]
-    return ":" in last
-
-
-def _tag_of(image: str) -> Optional[str]:
-    if _is_digest_pinned(image):
-        return None
-    last = image.rsplit("/", 1)[-1]
-    if ":" not in last:
-        return None
-    return last.rsplit(":", 1)[-1]
-
-
-def _validate_sec018(doc: Dict[str, Any]) -> List[Finding]:
-    findings: List[Finding] = []
-    pod_spec = _extract_pod_spec(doc)
-    if not pod_spec:
-        return findings
-
-    meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
-    resource_name = meta.get("name") if isinstance(meta, dict) else None
-
-    for section, container in _iter_containers(pod_spec):
-        image = container.get("image")
-        name = container.get("name", "<unnamed>")
-        if not isinstance(image, str) or not image.strip():
-            continue
-
-        image = image.strip()
-
-        if _is_digest_pinned(image):
-            continue
-
-        if not _has_explicit_tag(image):
-            findings.append(
-                Finding(
-                    rule_id="SEC018",
-                    message=(
-                        f"{section}.{name} uses image '{image}' without an explicit immutable tag; "
-                        "use a fixed version tag or digest pin (@sha256:...)."
-                    ),
-                    severity="high",
-                    resource=resource_name,
+            if missing:
+                self.findings.append(
+                    Finding(
+                        rule_id="SEC023",
+                        severity=RULES["SEC023"]["severity"],
+                        message=f"Container '{cname}' missing required resources: {', '.join(missing)}",
+                        kind=kind,
+                        name=name,
+                    )
                 )
-            )
-            continue
-
-        tag = _tag_of(image)
-        if tag and tag.lower() == "latest":
-            findings.append(
-                Finding(
-                    rule_id="SEC018",
-                    message=(
-                        f"{section}.{name} uses mutable image tag ':latest' in '{image}'; "
-                        "use a fixed version tag or digest pin (@sha256:...)."
-                    ),
-                    severity="high",
-                    resource=resource_name,
-                )
-            )
-
-    return findings
-
-
-def validate_manifest(content: str) -> List[Dict[str, Any]]:
-    findings: List[Finding] = []
-    for doc in yaml.safe_load_all(content):
-        if not isinstance(doc, dict):
-            continue
-        findings.extend(_validate_sec018(doc))
-
-    return [
-        {
-            "rule_id": f.rule_id,
-            "message": f.message,
-            "severity": f.severity,
-            "resource": f.resource,
-        }
-        for f in findings
-    ]
