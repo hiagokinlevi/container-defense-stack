@@ -5,79 +5,60 @@ from typing import Any, Dict, List, Optional
 
 
 @dataclass
-class ValidationFinding:
+class Finding:
     rule_id: str
     severity: str
-    resource: str
     message: str
     remediation: str
+    path: Optional[str] = None
 
 
 RULES: Dict[str, Dict[str, str]] = {
-    "SEC021": {
-        "title": "Disable ServiceAccount token automount by default",
-        "severity": "HIGH",
-        "description": "Workloads should explicitly set automountServiceAccountToken: false at pod spec level unless Kubernetes API access is required.",
-        "remediation": "Set spec.automountServiceAccountToken: false for Pod manifests, or spec.template.spec.automountServiceAccountToken: false for controller-managed pods (Deployment/StatefulSet/DaemonSet/Job/CronJob).",
+    "SEC022": {
+        "severity": "MEDIUM",
+        "message": "Container root filesystem is writable (readOnlyRootFilesystem not set to true).",
+        "remediation": "Set securityContext.readOnlyRootFilesystem: true on every container and initContainer to reduce tampering and persistence risk.",
     }
 }
 
 
-def _resource_name(doc: Dict[str, Any]) -> str:
-    kind = doc.get("kind", "Unknown")
-    name = (((doc.get("metadata") or {}).get("name")) or "<unnamed>")
-    return f"{kind}/{name}"
+def _iter_podspec_containers(resource: Dict[str, Any]) -> List[tuple[str, int, Dict[str, Any]]]:
+    kind = (resource or {}).get("kind")
+    spec = (resource or {}).get("spec") or {}
 
-
-def _pod_spec_for(doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    kind = doc.get("kind")
-    spec = doc.get("spec") or {}
-
+    pod_spec = None
     if kind == "Pod":
-        return spec if isinstance(spec, dict) else None
+        pod_spec = spec
+    else:
+        template = spec.get("template") or {}
+        pod_spec = template.get("spec") or {}
 
-    if kind in {"Deployment", "StatefulSet", "DaemonSet", "Job", "ReplicaSet", "ReplicationController"}:
-        tmpl = spec.get("template") or {}
-        return (tmpl.get("spec") or {}) if isinstance(tmpl, dict) else None
-
-    if kind == "CronJob":
-        jt = (spec.get("jobTemplate") or {}).get("spec") or {}
-        tmpl = (jt.get("template") or {})
-        return (tmpl.get("spec") or {}) if isinstance(tmpl, dict) else None
-
-    return None
-
-
-def _check_sec021(doc: Dict[str, Any]) -> List[ValidationFinding]:
-    supported = {"Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"}
-    kind = doc.get("kind")
-    if kind not in supported:
-        return []
-
-    pod_spec = _pod_spec_for(doc) or {}
-    value = pod_spec.get("automountServiceAccountToken", None)
-
-    if value is False:
-        return []
-
-    return [
-        ValidationFinding(
-            rule_id="SEC021",
-            severity=RULES["SEC021"]["severity"],
-            resource=_resource_name(doc),
-            message=(
-                "automountServiceAccountToken is not explicitly set to false on the pod spec; "
-                "default token mounting can enable token theft and lateral movement."
-            ),
-            remediation=RULES["SEC021"]["remediation"],
-        )
-    ]
+    out: List[tuple[str, int, Dict[str, Any]]] = []
+    for key in ("containers", "initContainers"):
+        items = pod_spec.get(key) or []
+        if isinstance(items, list):
+            for i, c in enumerate(items):
+                if isinstance(c, dict):
+                    out.append((key, i, c))
+    return out
 
 
-def validate_manifest_documents(documents: List[Dict[str, Any]]) -> List[ValidationFinding]:
-    findings: List[ValidationFinding] = []
-    for doc in documents:
-        if not isinstance(doc, dict) or not doc:
-            continue
-        findings.extend(_check_sec021(doc))
+def validate_manifest(resource: Dict[str, Any]) -> List[Finding]:
+    findings: List[Finding] = []
+
+    for section, idx, container in _iter_podspec_containers(resource):
+        sc = container.get("securityContext") or {}
+        if sc.get("readOnlyRootFilesystem") is not True:
+            rule = RULES["SEC022"]
+            name = container.get("name", f"{section}[{idx}]")
+            findings.append(
+                Finding(
+                    rule_id="SEC022",
+                    severity=rule["severity"],
+                    message=f"{rule['message']} Container: {name}",
+                    remediation=rule["remediation"],
+                    path=f"spec.template.spec.{section}[{idx}].securityContext.readOnlyRootFilesystem",
+                )
+            )
+
     return findings
