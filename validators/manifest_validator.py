@@ -1,113 +1,82 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Tuple
 
 import yaml
 
 
 @dataclass
-class Finding:
+class ValidationFinding:
     rule_id: str
     severity: str
-    resource: str
     message: str
+    remediation: str
+    resource: str
 
 
-RULES: Dict[str, Dict[str, str]] = {
-    "SEC001": {"severity": "HIGH", "title": "Privileged container enabled"},
-    "SEC002": {"severity": "HIGH", "title": "Privilege escalation allowed"},
-    "SEC003": {"severity": "MEDIUM", "title": "Capabilities not dropped"},
-    "SEC004": {"severity": "HIGH", "title": "Host network enabled"},
-    "SEC005": {"severity": "HIGH", "title": "Host PID enabled"},
-    "SEC006": {"severity": "HIGH", "title": "Host IPC enabled"},
-    "SEC007": {"severity": "MEDIUM", "title": "Image tag latest used"},
-    "SEC008": {"severity": "MEDIUM", "title": "No resource limits"},
-    "SEC009": {"severity": "MEDIUM", "title": "No resource requests"},
-    "SEC010": {"severity": "HIGH", "title": "HostPath volume mounted"},
-    "SEC011": {"severity": "MEDIUM", "title": "ServiceAccount token automount enabled"},
-    "SEC012": {"severity": "MEDIUM", "title": "readOnlyRootFilesystem not true"},
-    "SEC013": {"severity": "MEDIUM", "title": "Missing seccompProfile RuntimeDefault"},
-    "SEC014": {"severity": "MEDIUM", "title": "allowPrivilegeEscalation not false"},
-    "SEC015": {"severity": "LOW", "title": "No liveness/readiness probes configured"},
-    "SEC024": {"severity": "HIGH", "title": "runAsNonRoot not explicitly true"},
-}
+class ManifestValidator:
+    """Kubernetes manifest security validator."""
 
+    def validate(self, content: str) -> List[ValidationFinding]:
+        findings: List[ValidationFinding] = []
+        docs = list(yaml.safe_load_all(content))
 
-WORKLOAD_KINDS = {"Pod", "Deployment", "DaemonSet", "StatefulSet", "ReplicaSet", "Job", "CronJob"}
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            kind = doc.get("kind", "Unknown")
+            name = (doc.get("metadata") or {}).get("name", "unknown")
+            resource = f"{kind}/{name}"
 
+            pod_spec = self._extract_pod_spec(doc)
+            if pod_spec is None:
+                continue
 
-def _resource_name(doc: Dict[str, Any]) -> str:
-    kind = doc.get("kind", "Unknown")
-    name = ((doc.get("metadata") or {}).get("name")) or "unnamed"
-    return f"{kind}/{name}"
+            findings.extend(self._check_sec026_host_namespace_sharing(pod_spec, resource))
 
+        return findings
 
-def _pod_spec(doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    kind = doc.get("kind")
-    spec = doc.get("spec") or {}
-    if kind == "Pod":
-        return spec
-    if kind in {"Deployment", "DaemonSet", "StatefulSet", "ReplicaSet", "Job"}:
-        return ((spec.get("template") or {}).get("spec")) or {}
-    if kind == "CronJob":
-        return ((((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec")) or {}
-    return None
+    def _extract_pod_spec(self, doc: Dict[str, Any]) -> Dict[str, Any] | None:
+        kind = doc.get("kind")
+        spec = doc.get("spec")
+        if not isinstance(spec, dict):
+            return None
 
+        if kind == "Pod":
+            return spec
 
-def _containers(pod_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    out.extend(pod_spec.get("containers") or [])
-    out.extend(pod_spec.get("initContainers") or [])
-    return out
+        template = spec.get("template")
+        if isinstance(template, dict):
+            template_spec = template.get("spec")
+            if isinstance(template_spec, dict):
+                return template_spec
 
+        return None
 
-def _check_sec024(doc: Dict[str, Any]) -> List[Finding]:
-    if doc.get("kind") not in WORKLOAD_KINDS:
-        return []
+    def _check_sec026_host_namespace_sharing(
+        self, pod_spec: Dict[str, Any], resource: str
+    ) -> List[ValidationFinding]:
+        findings: List[ValidationFinding] = []
+        flags: List[Tuple[str, Any]] = [
+            ("hostNetwork", pod_spec.get("hostNetwork", False)),
+            ("hostPID", pod_spec.get("hostPID", False)),
+            ("hostIPC", pod_spec.get("hostIPC", False)),
+        ]
 
-    pod_spec = _pod_spec(doc)
-    if not pod_spec:
-        return []
-
-    findings: List[Finding] = []
-    resource = _resource_name(doc)
-
-    pod_sc = pod_spec.get("securityContext") or {}
-    pod_ranr = pod_sc.get("runAsNonRoot")
-
-    for c in _containers(pod_spec):
-        c_name = c.get("name", "unnamed")
-        c_sc = c.get("securityContext") or {}
-        c_ranr = c_sc.get("runAsNonRoot")
-        effective = c_ranr if c_ranr is not None else pod_ranr
-        if effective is not True:
-            findings.append(
-                Finding(
-                    rule_id="SEC024",
-                    severity=RULES["SEC024"]["severity"],
-                    resource=resource,
-                    message=f"container '{c_name}' does not explicitly enforce runAsNonRoot=true at container or pod level",
+        for field, value in flags:
+            if value is True:
+                findings.append(
+                    ValidationFinding(
+                        rule_id="SEC026",
+                        severity="HIGH",
+                        message=f"{field} is enabled (true).",
+                        remediation=(
+                            f"Set spec.{field}: false by default and only enable it when explicitly justified "
+                            "and documented for the workload."
+                        ),
+                        resource=resource,
+                    )
                 )
-            )
 
-    return findings
-
-
-def validate_manifest(path: str) -> List[Finding]:
-    findings: List[Finding] = []
-    with open(path, "r", encoding="utf-8") as f:
-        docs = list(yaml.safe_load_all(f))
-
-    for doc in docs:
-        if not isinstance(doc, dict):
-            continue
-        findings.extend(_check_sec024(doc))
-
-    findings.sort(key=lambda x: (x.rule_id, x.resource, x.message))
-    return findings
-
-
-def findings_to_json(findings: List[Finding]) -> str:
-    return json.dumps([f.__dict__ for f in findings], indent=2)
+        return findings
