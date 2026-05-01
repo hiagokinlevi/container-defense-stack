@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add SEC024 Validator Rule for Missing runAsNonRoot=true (cycle 40)
+- [x] Add SEC025 Validator Rule for Missing `allowPrivilegeEscalation=false` (cycle 41)
