@@ -1,64 +1,99 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass
-class Finding:
+class ValidationIssue:
     rule_id: str
-    severity: str
     message: str
+    resource_kind: str
+    resource_name: str
     remediation: str
-    path: Optional[str] = None
 
 
-RULES: Dict[str, Dict[str, str]] = {
-    "SEC022": {
-        "severity": "MEDIUM",
-        "message": "Container root filesystem is writable (readOnlyRootFilesystem not set to true).",
-        "remediation": "Set securityContext.readOnlyRootFilesystem: true on every container and initContainer to reduce tampering and persistence risk.",
-    }
-}
+def _safe_get(d: Dict[str, Any], path: List[str], default=None):
+    cur: Any = d
+    for p in path:
+        if not isinstance(cur, dict) or p not in cur:
+            return default
+        cur = cur[p]
+    return cur
 
 
-def _iter_podspec_containers(resource: Dict[str, Any]) -> List[tuple[str, int, Dict[str, Any]]]:
-    kind = (resource or {}).get("kind")
-    spec = (resource or {}).get("spec") or {}
+def _pod_spec_and_meta(doc: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str, str]:
+    kind = str(doc.get("kind", ""))
+    name = str(_safe_get(doc, ["metadata", "name"], "<unknown>"))
 
-    pod_spec = None
     if kind == "Pod":
-        pod_spec = spec
-    else:
-        template = spec.get("template") or {}
-        pod_spec = template.get("spec") or {}
-
-    out: List[tuple[str, int, Dict[str, Any]]] = []
-    for key in ("containers", "initContainers"):
-        items = pod_spec.get(key) or []
-        if isinstance(items, list):
-            for i, c in enumerate(items):
-                if isinstance(c, dict):
-                    out.append((key, i, c))
-    return out
+        return doc.get("spec"), kind, name
+    if kind in {"Deployment", "StatefulSet", "DaemonSet", "Job", "ReplicaSet", "ReplicationController"}:
+        return _safe_get(doc, ["spec", "template", "spec"]), kind, name
+    if kind == "CronJob":
+        return _safe_get(doc, ["spec", "jobTemplate", "spec", "template", "spec"]), kind, name
+    return None, kind, name
 
 
-def validate_manifest(resource: Dict[str, Any]) -> List[Finding]:
-    findings: List[Finding] = []
+def _all_containers(pod_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    containers: List[Dict[str, Any]] = []
+    for key in ("containers", "initContainers", "ephemeralContainers"):
+        value = pod_spec.get(key, [])
+        if isinstance(value, list):
+            containers.extend([c for c in value if isinstance(c, dict)])
+    return containers
 
-    for section, idx, container in _iter_podspec_containers(resource):
-        sc = container.get("securityContext") or {}
-        if sc.get("readOnlyRootFilesystem") is not True:
-            rule = RULES["SEC022"]
-            name = container.get("name", f"{section}[{idx}]")
-            findings.append(
-                Finding(
-                    rule_id="SEC022",
-                    severity=rule["severity"],
-                    message=f"{rule['message']} Container: {name}",
-                    remediation=rule["remediation"],
-                    path=f"spec.template.spec.{section}[{idx}].securityContext.readOnlyRootFilesystem",
+
+def _seccomp_type_from_security_context(sc: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(sc, dict):
+        return None
+    seccomp = sc.get("seccompProfile")
+    if not isinstance(seccomp, dict):
+        return None
+    t = seccomp.get("type")
+    return str(t) if t is not None else None
+
+
+def validate_sec030(documents: List[Dict[str, Any]]) -> List[ValidationIssue]:
+    """
+    SEC030: Fail when neither pod-level nor container-level seccompProfile.type
+    is effectively set to RuntimeDefault for every container in workload pod templates.
+    """
+    issues: List[ValidationIssue] = []
+
+    for doc in documents:
+        pod_spec, kind, name = _pod_spec_and_meta(doc)
+        if pod_spec is None:
+            continue
+
+        pod_sc = pod_spec.get("securityContext", {}) if isinstance(pod_spec, dict) else {}
+        pod_seccomp_type = _seccomp_type_from_security_context(pod_sc)
+
+        offenders: List[str] = []
+        for c in _all_containers(pod_spec):
+            cname = str(c.get("name", "<unnamed>"))
+            c_sc = c.get("securityContext", {}) if isinstance(c, dict) else {}
+            c_seccomp_type = _seccomp_type_from_security_context(c_sc)
+
+            effective = c_seccomp_type if c_seccomp_type is not None else pod_seccomp_type
+            if effective != "RuntimeDefault":
+                offenders.append(cname)
+
+        if offenders:
+            issues.append(
+                ValidationIssue(
+                    rule_id="SEC030",
+                    message=(
+                        f"{kind}/{name} has container(s) without effective seccompProfile.type=RuntimeDefault: "
+                        + ", ".join(offenders)
+                    ),
+                    resource_kind=kind,
+                    resource_name=name,
+                    remediation=(
+                        "Set spec.template.spec.securityContext.seccompProfile.type: RuntimeDefault "
+                        f"(or spec.securityContext for Pod), and ensure any container-level override also uses RuntimeDefault."
+                    ),
                 )
             )
 
-    return findings
+    return issues
