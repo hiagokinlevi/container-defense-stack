@@ -7,75 +7,71 @@ from typing import Any, Dict, List, Optional
 @dataclass
 class ValidationIssue:
     rule_id: str
-    title: str
     message: str
     severity: str = "HIGH"
-    resource: Optional[str] = None
-    container: Optional[str] = None
+    path: Optional[str] = None
 
 
 RULES: Dict[str, Dict[str, str]] = {
-    "SEC027": {
-        "title": "Container must drop all Linux capabilities",
-        "severity": "HIGH",
-        "description": "Containers should explicitly set securityContext.capabilities.drop to include ALL.",
-        "remediation": "Set securityContext.capabilities.drop: [\"ALL\"] for every container and initContainer.",
-    }
+    "SEC001": {"title": "Disallow latest tag", "severity": "MEDIUM"},
+    "SEC002": {"title": "Require non-root user", "severity": "HIGH"},
+    "SEC003": {"title": "Require resource limits", "severity": "MEDIUM"},
+    "SEC004": {"title": "Require resource requests", "severity": "MEDIUM"},
+    "SEC005": {"title": "Disallow hostNetwork", "severity": "HIGH"},
+    "SEC006": {"title": "Disallow hostPID", "severity": "HIGH"},
+    "SEC007": {"title": "Disallow hostIPC", "severity": "HIGH"},
+    "SEC008": {"title": "Disallow hostPath volumes", "severity": "HIGH"},
+    "SEC009": {"title": "Require readOnlyRootFilesystem", "severity": "MEDIUM"},
+    "SEC010": {"title": "Drop all Linux capabilities", "severity": "MEDIUM"},
+    "SEC011": {"title": "Disallow privileged escalation", "severity": "HIGH"},
+    "SEC012": {"title": "Require seccomp profile", "severity": "HIGH"},
+    "SEC013": {"title": "Disallow default service account", "severity": "LOW"},
+    "SEC014": {"title": "Require imagePullPolicy", "severity": "LOW"},
+    "SEC015": {"title": "Require liveness/readiness probes", "severity": "LOW"},
+    "SEC028": {"title": "Disallow privileged containers", "severity": "CRITICAL"},
 }
 
 
-class KubernetesValidator:
-    def __init__(self) -> None:
-        self.rules = RULES
+def _pod_spec(doc: Dict[str, Any]) -> Dict[str, Any]:
+    kind = (doc or {}).get("kind", "")
+    spec = (doc or {}).get("spec", {}) or {}
 
-    def validate_manifest(self, manifest: Dict[str, Any]) -> List[ValidationIssue]:
-        issues: List[ValidationIssue] = []
-        spec = self._extract_pod_spec(manifest)
-        if not spec:
-            return issues
+    if kind in {"Deployment", "ReplicaSet", "StatefulSet", "DaemonSet", "Job"}:
+        return ((spec.get("template") or {}).get("spec") or {})
+    if kind == "CronJob":
+        return ((((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec") or {})
+    return spec
 
-        issues.extend(self._check_sec027(manifest, spec))
-        return issues
 
-    def _extract_pod_spec(self, manifest: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        kind = (manifest or {}).get("kind", "")
-        if kind == "Pod":
-            return manifest.get("spec")
+def _iter_containers_with_paths(pod_spec: Dict[str, Any]):
+    for section in ("containers", "initContainers"):
+        items = pod_spec.get(section) or []
+        if isinstance(items, list):
+            for idx, container in enumerate(items):
+                yield section, idx, (container or {})
 
-        spec = (manifest or {}).get("spec", {})
-        template = spec.get("template", {})
-        return template.get("spec")
 
-    def _check_sec027(self, manifest: Dict[str, Any], pod_spec: Dict[str, Any]) -> List[ValidationIssue]:
-        issues: List[ValidationIssue] = []
-        all_containers = []
+def check_sec028_no_privileged_true(doc: Dict[str, Any]) -> List[ValidationIssue]:
+    issues: List[ValidationIssue] = []
+    pod_spec = _pod_spec(doc)
 
-        for c in pod_spec.get("containers", []) or []:
-            all_containers.append(("container", c))
-        for c in pod_spec.get("initContainers", []) or []:
-            all_containers.append(("initContainer", c))
-
-        for ctype, container in all_containers:
-            name = container.get("name", "<unnamed>")
-            security_context = container.get("securityContext") or {}
-            capabilities = security_context.get("capabilities") or {}
-            drop = capabilities.get("drop")
-
-            has_all = isinstance(drop, list) and any(str(item).upper() == "ALL" for item in drop)
-            if not has_all:
-                rule = self.rules["SEC027"]
-                issues.append(
-                    ValidationIssue(
-                        rule_id="SEC027",
-                        title=rule["title"],
-                        severity=rule["severity"],
-                        resource=f"{manifest.get('kind', 'Unknown')}/{(manifest.get('metadata') or {}).get('name', '<unnamed>')}",
-                        container=name,
-                        message=(
-                            f"{ctype} '{name}' is missing securityContext.capabilities.drop: ['ALL']. "
-                            f"Remediation: {rule['remediation']}"
-                        ),
-                    )
+    for section, idx, container in _iter_containers_with_paths(pod_spec):
+        sc = container.get("securityContext") or {}
+        if sc.get("privileged") is True:
+            name = container.get("name", f"{section}[{idx}]")
+            issues.append(
+                ValidationIssue(
+                    rule_id="SEC028",
+                    message=f"Container '{name}' sets securityContext.privileged=true",
+                    severity=RULES["SEC028"]["severity"],
+                    path=f"spec.{section}[{idx}].securityContext.privileged",
                 )
+            )
 
-        return issues
+    return issues
+
+
+def validate_manifest_dict(doc: Dict[str, Any]) -> List[ValidationIssue]:
+    issues: List[ValidationIssue] = []
+    issues.extend(check_sec028_no_privileged_true(doc))
+    return issues
