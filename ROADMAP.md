@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add SEC028 Validator Rule for privileged=true Container Denial (cycle 44)
+- [x] Add SEC029 Validator Rule for Namespace-Level Pod Security Admission Enforcement (cycle 45)
