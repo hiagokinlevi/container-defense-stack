@@ -1,82 +1,67 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from pathlib import Path
+from typing import Any
 
 import yaml
 
 
 @dataclass
-class ValidationFinding:
+class ValidationIssue:
     rule_id: str
-    severity: str
     message: str
-    remediation: str
-    resource: str
+    severity: str = "HIGH"
+    resource_kind: str | None = None
+    resource_name: str | None = None
+
+
+RULES: dict[str, str] = {
+    "SEC001": "Container must not run privileged",
+    "SEC002": "Container must not allow privilege escalation",
+    "SEC003": "Container should run as non-root",
+    "SEC004": "Container should use read-only root filesystem",
+    "SEC005": "Container should drop all capabilities",
+    "SEC006": "Image tag should not be latest",
+    "SEC007": "Resources requests/limits should be set",
+    "SEC008": "Liveness/readiness probes should be configured",
+    "SEC009": "Host networking should be avoided",
+    "SEC010": "Host PID/IPC should be avoided",
+    "SEC011": "HostPath mounts should be avoided",
+    "SEC012": "ServiceAccount token automount should be disabled when not needed",
+    "SEC013": "seccompProfile should be RuntimeDefault/Localhost",
+    "SEC014": "NetworkPolicy default deny should exist",
+    "SEC015": "Namespace should define baseline security labels",
+    "SEC029": "Namespace must set pod-security.kubernetes.io/enforce label",
+}
 
 
 class ManifestValidator:
-    """Kubernetes manifest security validator."""
+    def validate_file(self, path: str | Path) -> list[ValidationIssue]:
+        with open(path, "r", encoding="utf-8") as f:
+            docs = list(yaml.safe_load_all(f))
+        return self.validate_documents(docs)
 
-    def validate(self, content: str) -> List[ValidationFinding]:
-        findings: List[ValidationFinding] = []
-        docs = list(yaml.safe_load_all(content))
-
+    def validate_documents(self, docs: list[dict[str, Any] | None]) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
         for doc in docs:
             if not isinstance(doc, dict):
                 continue
-            kind = doc.get("kind", "Unknown")
-            name = (doc.get("metadata") or {}).get("name", "unknown")
-            resource = f"{kind}/{name}"
+            kind = str(doc.get("kind", ""))
+            metadata = doc.get("metadata") or {}
+            name = metadata.get("name")
 
-            pod_spec = self._extract_pod_spec(doc)
-            if pod_spec is None:
-                continue
-
-            findings.extend(self._check_sec026_host_namespace_sharing(pod_spec, resource))
-
-        return findings
-
-    def _extract_pod_spec(self, doc: Dict[str, Any]) -> Dict[str, Any] | None:
-        kind = doc.get("kind")
-        spec = doc.get("spec")
-        if not isinstance(spec, dict):
-            return None
-
-        if kind == "Pod":
-            return spec
-
-        template = spec.get("template")
-        if isinstance(template, dict):
-            template_spec = template.get("spec")
-            if isinstance(template_spec, dict):
-                return template_spec
-
-        return None
-
-    def _check_sec026_host_namespace_sharing(
-        self, pod_spec: Dict[str, Any], resource: str
-    ) -> List[ValidationFinding]:
-        findings: List[ValidationFinding] = []
-        flags: List[Tuple[str, Any]] = [
-            ("hostNetwork", pod_spec.get("hostNetwork", False)),
-            ("hostPID", pod_spec.get("hostPID", False)),
-            ("hostIPC", pod_spec.get("hostIPC", False)),
-        ]
-
-        for field, value in flags:
-            if value is True:
-                findings.append(
-                    ValidationFinding(
-                        rule_id="SEC026",
-                        severity="HIGH",
-                        message=f"{field} is enabled (true).",
-                        remediation=(
-                            f"Set spec.{field}: false by default and only enable it when explicitly justified "
-                            "and documented for the workload."
-                        ),
-                        resource=resource,
+            if kind == "Namespace":
+                labels = metadata.get("labels") or {}
+                enforce = labels.get("pod-security.kubernetes.io/enforce")
+                if not enforce:
+                    issues.append(
+                        ValidationIssue(
+                            rule_id="SEC029",
+                            message="Namespace is missing pod-security.kubernetes.io/enforce label",
+                            severity="HIGH",
+                            resource_kind=kind,
+                            resource_name=name,
+                        )
                     )
-                )
-
-        return findings
+        return issues
