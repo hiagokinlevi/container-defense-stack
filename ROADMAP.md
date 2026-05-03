@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add SEC030 Validator Rule for Missing Pod/Container `seccompProfile.type: RuntimeDefault` Coverage in Pod Templates (cycle 46)
+- [x] Add SEC031 Validator Rule for hostPath Volume Usage Denial (cycle 47)
