@@ -1,67 +1,135 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
-
-import yaml
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 @dataclass
-class ValidationIssue:
+class ValidationFinding:
     rule_id: str
     message: str
-    severity: str = "HIGH"
-    resource_kind: str | None = None
-    resource_name: str | None = None
+    resource_kind: str
+    resource_name: str
+    path: str
 
 
-RULES: dict[str, str] = {
-    "SEC001": "Container must not run privileged",
-    "SEC002": "Container must not allow privilege escalation",
-    "SEC003": "Container should run as non-root",
-    "SEC004": "Container should use read-only root filesystem",
-    "SEC005": "Container should drop all capabilities",
-    "SEC006": "Image tag should not be latest",
-    "SEC007": "Resources requests/limits should be set",
-    "SEC008": "Liveness/readiness probes should be configured",
-    "SEC009": "Host networking should be avoided",
-    "SEC010": "Host PID/IPC should be avoided",
-    "SEC011": "HostPath mounts should be avoided",
-    "SEC012": "ServiceAccount token automount should be disabled when not needed",
-    "SEC013": "seccompProfile should be RuntimeDefault/Localhost",
-    "SEC014": "NetworkPolicy default deny should exist",
-    "SEC015": "Namespace should define baseline security labels",
-    "SEC029": "Namespace must set pod-security.kubernetes.io/enforce label",
+RULES_INDEX: Dict[str, str] = {
+    "SEC032": "Container images must define imagePullPolicy; :latest requires Always, pinned tags allow IfNotPresent/Always.",
 }
 
 
-class ManifestValidator:
-    def validate_file(self, path: str | Path) -> list[ValidationIssue]:
-        with open(path, "r", encoding="utf-8") as f:
-            docs = list(yaml.safe_load_all(f))
-        return self.validate_documents(docs)
+def _get(obj: Dict[str, Any], path: Iterable[str]) -> Optional[Any]:
+    cur: Any = obj
+    for part in path:
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
 
-    def validate_documents(self, docs: list[dict[str, Any] | None]) -> list[ValidationIssue]:
-        issues: list[ValidationIssue] = []
-        for doc in docs:
-            if not isinstance(doc, dict):
+
+def _pod_spec_locations(resource: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
+    kind = (resource.get("kind") or "")
+    out: List[Tuple[str, Dict[str, Any]]] = []
+
+    if kind in {"Pod"}:
+        spec = resource.get("spec")
+        if isinstance(spec, dict):
+            out.append(("spec", spec))
+        return out
+
+    if kind in {"Deployment", "ReplicaSet", "DaemonSet", "StatefulSet", "Job"}:
+        spec = _get(resource, ["spec", "template", "spec"])
+        if isinstance(spec, dict):
+            out.append(("spec.template.spec", spec))
+        return out
+
+    if kind == "CronJob":
+        spec = _get(resource, ["spec", "jobTemplate", "spec", "template", "spec"])
+        if isinstance(spec, dict):
+            out.append(("spec.jobTemplate.spec.template.spec", spec))
+        return out
+
+    return out
+
+
+def _is_latest_or_implicit_latest(image: str) -> bool:
+    if "@sha256:" in image:
+        return False
+    image_no_repo_digest = image.split("@", 1)[0]
+    tail = image_no_repo_digest.rsplit("/", 1)[-1]
+    if ":" not in tail:
+        return True
+    return image_no_repo_digest.endswith(":latest")
+
+
+def _validate_sec032(resource: Dict[str, Any]) -> List[ValidationFinding]:
+    findings: List[ValidationFinding] = []
+    kind = resource.get("kind") or "Unknown"
+    name = _get(resource, ["metadata", "name"]) or "unknown"
+
+    for base_path, pod_spec in _pod_spec_locations(resource):
+        for field in ("containers", "initContainers"):
+            containers = pod_spec.get(field) or []
+            if not isinstance(containers, list):
                 continue
-            kind = str(doc.get("kind", ""))
-            metadata = doc.get("metadata") or {}
-            name = metadata.get("name")
+            for idx, c in enumerate(containers):
+                if not isinstance(c, dict):
+                    continue
+                image = c.get("image") or ""
+                policy = c.get("imagePullPolicy")
+                c_name = c.get("name") or f"index-{idx}"
+                c_path = f"{base_path}.{field}[{idx}]"
 
-            if kind == "Namespace":
-                labels = metadata.get("labels") or {}
-                enforce = labels.get("pod-security.kubernetes.io/enforce")
-                if not enforce:
-                    issues.append(
-                        ValidationIssue(
-                            rule_id="SEC029",
-                            message="Namespace is missing pod-security.kubernetes.io/enforce label",
-                            severity="HIGH",
+                if policy is None:
+                    findings.append(
+                        ValidationFinding(
+                            rule_id="SEC032",
+                            message=f"{field[:-1]} '{c_name}' is missing imagePullPolicy",
                             resource_kind=kind,
                             resource_name=name,
+                            path=c_path,
                         )
                     )
-        return issues
+                    continue
+
+                if _is_latest_or_implicit_latest(image):
+                    if policy != "Always":
+                        findings.append(
+                            ValidationFinding(
+                                rule_id="SEC032",
+                                message=f"{field[:-1]} '{c_name}' uses latest/implicit-latest image and must set imagePullPolicy=Always",
+                                resource_kind=kind,
+                                resource_name=name,
+                                path=f"{c_path}.imagePullPolicy",
+                            )
+                        )
+                else:
+                    if policy not in {"IfNotPresent", "Always"}:
+                        findings.append(
+                            ValidationFinding(
+                                rule_id="SEC032",
+                                message=f"{field[:-1]} '{c_name}' uses pinned image and must set imagePullPolicy to IfNotPresent or Always",
+                                resource_kind=kind,
+                                resource_name=name,
+                                path=f"{c_path}.imagePullPolicy",
+                            )
+                        )
+
+    return findings
+
+
+def validate_manifest_documents(documents: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    findings: List[Dict[str, str]] = []
+    for doc in documents:
+        for f in _validate_sec032(doc):
+            findings.append(
+                {
+                    "rule_id": f.rule_id,
+                    "message": f.message,
+                    "resource_kind": f.resource_kind,
+                    "resource_name": f.resource_name,
+                    "path": f.path,
+                    "rule": RULES_INDEX.get(f.rule_id, ""),
+                }
+            )
+    return findings
