@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add SEC031 Validator Rule for hostPath Volume Usage Denial (cycle 47)
+- [x] Add SEC032 Validator Rule for Missing `imagePullPolicy` on Container Images (cycle 48)
