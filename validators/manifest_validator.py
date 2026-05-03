@@ -1,135 +1,102 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 
 @dataclass
 class ValidationFinding:
-    rule_id: str
+    code: str
     message: str
-    resource_kind: str
-    resource_name: str
     path: str
+    severity: str = "high"
 
 
-RULES_INDEX: Dict[str, str] = {
-    "SEC032": "Container images must define imagePullPolicy; :latest requires Always, pinned tags allow IfNotPresent/Always.",
-}
+class ManifestValidator:
+    """Kubernetes manifest validator."""
 
+    def validate(self, manifest: Dict[str, Any]) -> List[ValidationFinding]:
+        findings: List[ValidationFinding] = []
 
-def _get(obj: Dict[str, Any], path: Iterable[str]) -> Optional[Any]:
-    cur: Any = obj
-    for part in path:
-        if not isinstance(cur, dict) or part not in cur:
-            return None
-        cur = cur[part]
-    return cur
+        pod_spec = self._extract_pod_spec(manifest)
+        if not pod_spec:
+            return findings
 
+        findings.extend(self._check_sec033_readonly_config_secret_mounts(pod_spec))
+        return findings
 
-def _pod_spec_locations(resource: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
-    kind = (resource.get("kind") or "")
-    out: List[Tuple[str, Dict[str, Any]]] = []
+    def _extract_pod_spec(self, manifest: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        kind = manifest.get("kind")
+        spec = manifest.get("spec", {})
 
-    if kind in {"Pod"}:
-        spec = resource.get("spec")
-        if isinstance(spec, dict):
-            out.append(("spec", spec))
-        return out
+        if kind == "Pod":
+            return spec
 
-    if kind in {"Deployment", "ReplicaSet", "DaemonSet", "StatefulSet", "Job"}:
-        spec = _get(resource, ["spec", "template", "spec"])
-        if isinstance(spec, dict):
-            out.append(("spec.template.spec", spec))
-        return out
+        template = spec.get("template", {})
+        return template.get("spec")
 
-    if kind == "CronJob":
-        spec = _get(resource, ["spec", "jobTemplate", "spec", "template", "spec"])
-        if isinstance(spec, dict):
-            out.append(("spec.jobTemplate.spec.template.spec", spec))
-        return out
-
-    return out
-
-
-def _is_latest_or_implicit_latest(image: str) -> bool:
-    if "@sha256:" in image:
-        return False
-    image_no_repo_digest = image.split("@", 1)[0]
-    tail = image_no_repo_digest.rsplit("/", 1)[-1]
-    if ":" not in tail:
-        return True
-    return image_no_repo_digest.endswith(":latest")
-
-
-def _validate_sec032(resource: Dict[str, Any]) -> List[ValidationFinding]:
-    findings: List[ValidationFinding] = []
-    kind = resource.get("kind") or "Unknown"
-    name = _get(resource, ["metadata", "name"]) or "unknown"
-
-    for base_path, pod_spec in _pod_spec_locations(resource):
-        for field in ("containers", "initContainers"):
-            containers = pod_spec.get(field) or []
-            if not isinstance(containers, list):
+    def _config_secret_volume_names(self, pod_spec: Dict[str, Any]) -> Set[str]:
+        names: Set[str] = set()
+        for vol in pod_spec.get("volumes", []) or []:
+            if not isinstance(vol, dict):
                 continue
-            for idx, c in enumerate(containers):
-                if not isinstance(c, dict):
-                    continue
-                image = c.get("image") or ""
-                policy = c.get("imagePullPolicy")
-                c_name = c.get("name") or f"index-{idx}"
-                c_path = f"{base_path}.{field}[{idx}]"
+            name = vol.get("name")
+            if not name:
+                continue
+            if "configMap" in vol or "secret" in vol:
+                names.add(name)
+        return names
 
-                if policy is None:
+    def _check_container_mounts(
+        self,
+        containers: List[Dict[str, Any]],
+        volume_names: Set[str],
+        container_type: str,
+    ) -> List[ValidationFinding]:
+        findings: List[ValidationFinding] = []
+        for i, container in enumerate(containers or []):
+            mounts = container.get("volumeMounts", []) or []
+            cname = container.get("name", f"{container_type}-{i}")
+            for j, mount in enumerate(mounts):
+                if not isinstance(mount, dict):
+                    continue
+                vol_name = mount.get("name")
+                if vol_name not in volume_names:
+                    continue
+                if mount.get("readOnly") is not True:
                     findings.append(
                         ValidationFinding(
-                            rule_id="SEC032",
-                            message=f"{field[:-1]} '{c_name}' is missing imagePullPolicy",
-                            resource_kind=kind,
-                            resource_name=name,
-                            path=c_path,
+                            code="SEC033",
+                            severity="medium",
+                            path=f"spec.{container_type}[{i}].volumeMounts[{j}]",
+                            message=(
+                                f"{container_type[:-1].capitalize()} '{cname}' mounts ConfigMap/Secret volume "
+                                f"'{vol_name}' without readOnly: true"
+                            ),
                         )
                     )
-                    continue
+        return findings
 
-                if _is_latest_or_implicit_latest(image):
-                    if policy != "Always":
-                        findings.append(
-                            ValidationFinding(
-                                rule_id="SEC032",
-                                message=f"{field[:-1]} '{c_name}' uses latest/implicit-latest image and must set imagePullPolicy=Always",
-                                resource_kind=kind,
-                                resource_name=name,
-                                path=f"{c_path}.imagePullPolicy",
-                            )
-                        )
-                else:
-                    if policy not in {"IfNotPresent", "Always"}:
-                        findings.append(
-                            ValidationFinding(
-                                rule_id="SEC032",
-                                message=f"{field[:-1]} '{c_name}' uses pinned image and must set imagePullPolicy to IfNotPresent or Always",
-                                resource_kind=kind,
-                                resource_name=name,
-                                path=f"{c_path}.imagePullPolicy",
-                            )
-                        )
+    def _check_sec033_readonly_config_secret_mounts(
+        self, pod_spec: Dict[str, Any]
+    ) -> List[ValidationFinding]:
+        target_volumes = self._config_secret_volume_names(pod_spec)
+        if not target_volumes:
+            return []
 
-    return findings
-
-
-def validate_manifest_documents(documents: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    findings: List[Dict[str, str]] = []
-    for doc in documents:
-        for f in _validate_sec032(doc):
-            findings.append(
-                {
-                    "rule_id": f.rule_id,
-                    "message": f.message,
-                    "resource_kind": f.resource_kind,
-                    "resource_name": f.resource_name,
-                    "path": f.path,
-                    "rule": RULES_INDEX.get(f.rule_id, ""),
-                }
+        findings: List[ValidationFinding] = []
+        findings.extend(
+            self._check_container_mounts(
+                pod_spec.get("containers", []) or [],
+                target_volumes,
+                "containers",
             )
-    return findings
+        )
+        findings.extend(
+            self._check_container_mounts(
+                pod_spec.get("initContainers", []) or [],
+                target_volumes,
+                "initContainers",
+            )
+        )
+        return findings
