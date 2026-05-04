@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add SEC033 Validator Rule to Require Immutable Container Root Filesystem Mounts (`readOnly: true`) for ConfigMap/Secret Volumes (cycle 49)
+- [x] Add SEC034 Validator Rule for ServiceAccount Token Automount Disablement (cycle 50)
