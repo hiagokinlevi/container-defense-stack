@@ -8,70 +8,86 @@ from typing import Any, Dict, List, Optional
 class ValidationIssue:
     rule_id: str
     message: str
-    severity: str = "HIGH"
-    path: Optional[str] = None
+    resource_kind: str
+    resource_name: str
 
 
-RULES: Dict[str, Dict[str, str]] = {
-    "SEC001": {"title": "Disallow latest tag", "severity": "MEDIUM"},
-    "SEC002": {"title": "Require non-root user", "severity": "HIGH"},
-    "SEC003": {"title": "Require resource limits", "severity": "MEDIUM"},
-    "SEC004": {"title": "Require resource requests", "severity": "MEDIUM"},
-    "SEC005": {"title": "Disallow hostNetwork", "severity": "HIGH"},
-    "SEC006": {"title": "Disallow hostPID", "severity": "HIGH"},
-    "SEC007": {"title": "Disallow hostIPC", "severity": "HIGH"},
-    "SEC008": {"title": "Disallow hostPath volumes", "severity": "HIGH"},
-    "SEC009": {"title": "Require readOnlyRootFilesystem", "severity": "MEDIUM"},
-    "SEC010": {"title": "Drop all Linux capabilities", "severity": "MEDIUM"},
-    "SEC011": {"title": "Disallow privileged escalation", "severity": "HIGH"},
-    "SEC012": {"title": "Require seccomp profile", "severity": "HIGH"},
-    "SEC013": {"title": "Disallow default service account", "severity": "LOW"},
-    "SEC014": {"title": "Require imagePullPolicy", "severity": "LOW"},
-    "SEC015": {"title": "Require liveness/readiness probes", "severity": "LOW"},
-    "SEC028": {"title": "Disallow privileged containers", "severity": "CRITICAL"},
+WORKLOAD_KINDS = {
+    "Deployment",
+    "StatefulSet",
+    "DaemonSet",
+    "ReplicaSet",
+    "Job",
+    "CronJob",
+    "Pod",
 }
 
 
-def _pod_spec(doc: Dict[str, Any]) -> Dict[str, Any]:
-    kind = (doc or {}).get("kind", "")
-    spec = (doc or {}).get("spec", {}) or {}
+RULES: Dict[str, Dict[str, str]] = {
+    "SEC034": {
+        "title": "Disable ServiceAccount token automount at Pod spec level",
+        "severity": "medium",
+        "description": "Workloads should set spec.template.spec.automountServiceAccountToken: false (or spec.automountServiceAccountToken for Pods) unless explicitly exempted.",
+    }
+}
 
-    if kind in {"Deployment", "ReplicaSet", "StatefulSet", "DaemonSet", "Job"}:
-        return ((spec.get("template") or {}).get("spec") or {})
+
+def _metadata(doc: Dict[str, Any]) -> Dict[str, Any]:
+    return doc.get("metadata") or {}
+
+
+def _name(doc: Dict[str, Any]) -> str:
+    return (_metadata(doc).get("name") or "<unknown>")
+
+
+def _kind(doc: Dict[str, Any]) -> str:
+    return doc.get("kind") or "<unknown>"
+
+
+def _is_sec034_exempt(doc: Dict[str, Any]) -> bool:
+    md = _metadata(doc)
+    annotations = md.get("annotations") or {}
+    labels = md.get("labels") or {}
+
+    # Explicit exemption knobs (string values for YAML compatibility)
+    for source in (annotations, labels):
+        if str(source.get("container-defense-stack.io/sec034-exempt", "")).lower() == "true":
+            return True
+        if str(source.get("security.container-defense-stack.io/sec034-exempt", "")).lower() == "true":
+            return True
+    return False
+
+
+def _pod_spec(doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    kind = _kind(doc)
+    spec = doc.get("spec") or {}
+    if kind == "Pod":
+        return spec
     if kind == "CronJob":
-        return ((((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec") or {})
-    return spec
+        return (((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec")
+    return ((spec.get("template") or {}).get("spec"))
 
 
-def _iter_containers_with_paths(pod_spec: Dict[str, Any]):
-    for section in ("containers", "initContainers"):
-        items = pod_spec.get(section) or []
-        if isinstance(items, list):
-            for idx, container in enumerate(items):
-                yield section, idx, (container or {})
-
-
-def check_sec028_no_privileged_true(doc: Dict[str, Any]) -> List[ValidationIssue]:
+def validate_manifest_docs(docs: List[Dict[str, Any]]) -> List[ValidationIssue]:
     issues: List[ValidationIssue] = []
-    pod_spec = _pod_spec(doc)
 
-    for section, idx, container in _iter_containers_with_paths(pod_spec):
-        sc = container.get("securityContext") or {}
-        if sc.get("privileged") is True:
-            name = container.get("name", f"{section}[{idx}]")
+    for doc in docs:
+        kind = _kind(doc)
+        if kind not in WORKLOAD_KINDS:
+            continue
+
+        if _is_sec034_exempt(doc):
+            continue
+
+        pod_spec = _pod_spec(doc) or {}
+        if pod_spec.get("automountServiceAccountToken") is not False:
             issues.append(
                 ValidationIssue(
-                    rule_id="SEC028",
-                    message=f"Container '{name}' sets securityContext.privileged=true",
-                    severity=RULES["SEC028"]["severity"],
-                    path=f"spec.{section}[{idx}].securityContext.privileged",
+                    rule_id="SEC034",
+                    message="Set automountServiceAccountToken: false at Pod spec level (or explicitly exempt SEC034).",
+                    resource_kind=kind,
+                    resource_name=_name(doc),
                 )
             )
 
-    return issues
-
-
-def validate_manifest_dict(doc: Dict[str, Any]) -> List[ValidationIssue]:
-    issues: List[ValidationIssue] = []
-    issues.extend(check_sec028_no_privileged_true(doc))
     return issues
