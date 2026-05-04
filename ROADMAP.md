@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add SEC034 Validator Rule for ServiceAccount Token Automount Disablement (cycle 50)
+- [x] Add SEC035 Validator Rule for Missing `resources.limits.memory` on Containers (cycle 51)
