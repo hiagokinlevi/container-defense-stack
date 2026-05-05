@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add SEC035 Validator Rule for Missing `resources.limits.memory` on Containers (cycle 51)
+- [x] Add SEC036 Validator Rule for `hostPort` Usage Denial in Pod Specs (cycle 52)
