@@ -1,102 +1,82 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set
-
-
-@dataclass
-class ValidationFinding:
-    code: str
-    message: str
-    path: str
-    severity: str = "high"
+from typing import Any, Dict, List, Tuple
 
 
 class ManifestValidator:
-    """Kubernetes manifest validator."""
+    """Kubernetes manifest security validator."""
 
-    def validate(self, manifest: Dict[str, Any]) -> List[ValidationFinding]:
-        findings: List[ValidationFinding] = []
+    EXCEPTION_ANNOTATIONS = {
+        "container-guard.io/exception-sec036": "SEC036",
+        "security.container-guard.io/exception-sec036": "SEC036",
+    }
 
-        pod_spec = self._extract_pod_spec(manifest)
+    def validate(self, manifest: Dict[str, Any]) -> List[Dict[str, str]]:
+        findings: List[Dict[str, str]] = []
+        findings.extend(self._check_sec036_hostport_denied(manifest))
+        return findings
+
+    def _check_sec036_hostport_denied(self, manifest: Dict[str, Any]) -> List[Dict[str, str]]:
+        """SEC036: Deny hostPort usage in Pod specs unless explicitly excepted by annotation.
+
+        Rationale: hostPort binds container ports on node interfaces and increases attack surface.
+        Remediation: expose workloads via ClusterIP Service/Ingress rather than host-level binding.
+        """
+        findings: List[Dict[str, str]] = []
+
+        kind = (manifest.get("kind") or "").strip()
+        metadata = manifest.get("metadata") or {}
+
+        pod_spec, pod_metadata = self._extract_pod_spec_and_metadata(manifest)
         if not pod_spec:
             return findings
 
-        findings.extend(self._check_sec033_readonly_config_secret_mounts(pod_spec))
-        return findings
+        if self._has_sec036_exception(metadata) or self._has_sec036_exception(pod_metadata):
+            return findings
 
-    def _extract_pod_spec(self, manifest: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        kind = manifest.get("kind")
-        spec = manifest.get("spec", {})
-
-        if kind == "Pod":
-            return spec
-
-        template = spec.get("template", {})
-        return template.get("spec")
-
-    def _config_secret_volume_names(self, pod_spec: Dict[str, Any]) -> Set[str]:
-        names: Set[str] = set()
-        for vol in pod_spec.get("volumes", []) or []:
-            if not isinstance(vol, dict):
-                continue
-            name = vol.get("name")
-            if not name:
-                continue
-            if "configMap" in vol or "secret" in vol:
-                names.add(name)
-        return names
-
-    def _check_container_mounts(
-        self,
-        containers: List[Dict[str, Any]],
-        volume_names: Set[str],
-        container_type: str,
-    ) -> List[ValidationFinding]:
-        findings: List[ValidationFinding] = []
-        for i, container in enumerate(containers or []):
-            mounts = container.get("volumeMounts", []) or []
-            cname = container.get("name", f"{container_type}-{i}")
-            for j, mount in enumerate(mounts):
-                if not isinstance(mount, dict):
+        containers = list(pod_spec.get("containers") or []) + list(pod_spec.get("initContainers") or [])
+        for container in containers:
+            cname = container.get("name", "<unnamed>")
+            for port in container.get("ports") or []:
+                host_port = port.get("hostPort", 0)
+                try:
+                    hp = int(host_port)
+                except (TypeError, ValueError):
                     continue
-                vol_name = mount.get("name")
-                if vol_name not in volume_names:
-                    continue
-                if mount.get("readOnly") is not True:
+                if hp > 0:
                     findings.append(
-                        ValidationFinding(
-                            code="SEC033",
-                            severity="medium",
-                            path=f"spec.{container_type}[{i}].volumeMounts[{j}]",
-                            message=(
-                                f"{container_type[:-1].capitalize()} '{cname}' mounts ConfigMap/Secret volume "
-                                f"'{vol_name}' without readOnly: true"
+                        {
+                            "id": "SEC036",
+                            "severity": "HIGH",
+                            "kind": kind or "Unknown",
+                            "message": (
+                                f"Container '{cname}' sets hostPort={hp}. Avoid host-level port binding; "
+                                "prefer ClusterIP Service/Ingress exposure."
                             ),
-                        )
+                        }
                     )
         return findings
 
-    def _check_sec033_readonly_config_secret_mounts(
-        self, pod_spec: Dict[str, Any]
-    ) -> List[ValidationFinding]:
-        target_volumes = self._config_secret_volume_names(pod_spec)
-        if not target_volumes:
-            return []
+    def _extract_pod_spec_and_metadata(self, manifest: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        kind = (manifest.get("kind") or "").strip()
+        spec = manifest.get("spec") or {}
 
-        findings: List[ValidationFinding] = []
-        findings.extend(
-            self._check_container_mounts(
-                pod_spec.get("containers", []) or [],
-                target_volumes,
-                "containers",
-            )
-        )
-        findings.extend(
-            self._check_container_mounts(
-                pod_spec.get("initContainers", []) or [],
-                target_volumes,
-                "initContainers",
-            )
-        )
-        return findings
+        if kind == "Pod":
+            return spec, manifest.get("metadata") or {}
+
+        if kind in {"Deployment", "StatefulSet", "DaemonSet", "Job"}:
+            template = spec.get("template") or {}
+            return template.get("spec") or {}, template.get("metadata") or {}
+
+        if kind == "CronJob":
+            template = (((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {})
+            return template.get("spec") or {}, template.get("metadata") or {}
+
+        return {}, {}
+
+    def _has_sec036_exception(self, metadata: Dict[str, Any]) -> bool:
+        annotations = (metadata or {}).get("annotations") or {}
+        for key, rule in self.EXCEPTION_ANNOTATIONS.items():
+            if rule == "SEC036" and str(annotations.get(key, "")).strip().lower() in {"true", "1", "yes", "allow"}:
+                return True
+        return False
