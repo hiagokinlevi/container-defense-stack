@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add SEC039 Validator Rule to Require `allowPrivilegeEscalation: false` on All Containers (cycle 55)
+- [x] Add SEC040 Validator Rule for Missing `securityContext.capabilities.drop: ["ALL"]` (cycle 56)
