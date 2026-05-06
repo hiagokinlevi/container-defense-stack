@@ -1,82 +1,79 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
+
+@dataclass
+class ValidationIssue:
+    rule_id: str
+    message: str
+    severity: str
+    path: str
 
 
 class ManifestValidator:
-    """Kubernetes manifest security validator."""
+    def __init__(self) -> None:
+        self.rule_dispatch = {
+            "SEC040": self._rule_sec040_capabilities_drop_all,
+        }
 
-    EXCEPTION_ANNOTATIONS = {
-        "container-guard.io/exception-sec036": "SEC036",
-        "security.container-guard.io/exception-sec036": "SEC036",
-    }
+    def validate(self, manifest: Dict[str, Any], enabled_rules: Optional[List[str]] = None) -> List[ValidationIssue]:
+        rules = enabled_rules or list(self.rule_dispatch.keys())
+        issues: List[ValidationIssue] = []
+        for rule_id in rules:
+            fn = self.rule_dispatch.get(rule_id)
+            if fn:
+                issues.extend(fn(manifest))
+        return issues
 
-    def validate(self, manifest: Dict[str, Any]) -> List[Dict[str, str]]:
-        findings: List[Dict[str, str]] = []
-        findings.extend(self._check_sec036_hostport_denied(manifest))
-        return findings
+    def _rule_sec040_capabilities_drop_all(self, manifest: Dict[str, Any]) -> List[ValidationIssue]:
+        issues: List[ValidationIssue] = []
 
-    def _check_sec036_hostport_denied(self, manifest: Dict[str, Any]) -> List[Dict[str, str]]:
-        """SEC036: Deny hostPort usage in Pod specs unless explicitly excepted by annotation.
+        spec = manifest.get("spec", {})
+        template_spec = spec.get("template", {}).get("spec", {}) if isinstance(spec, dict) else {}
+        pod_spec = template_spec or spec
 
-        Rationale: hostPort binds container ports on node interfaces and increases attack surface.
-        Remediation: expose workloads via ClusterIP Service/Ingress rather than host-level binding.
-        """
-        findings: List[Dict[str, str]] = []
+        if not isinstance(pod_spec, dict):
+            return issues
 
-        kind = (manifest.get("kind") or "").strip()
-        metadata = manifest.get("metadata") or {}
+        pod_drop = self._extract_drop_list(pod_spec.get("securityContext"))
 
-        pod_spec, pod_metadata = self._extract_pod_spec_and_metadata(manifest)
-        if not pod_spec:
-            return findings
+        for field in ("containers", "initContainers"):
+            containers = pod_spec.get(field, []) or []
+            if not isinstance(containers, list):
+                continue
 
-        if self._has_sec036_exception(metadata) or self._has_sec036_exception(pod_metadata):
-            return findings
-
-        containers = list(pod_spec.get("containers") or []) + list(pod_spec.get("initContainers") or [])
-        for container in containers:
-            cname = container.get("name", "<unnamed>")
-            for port in container.get("ports") or []:
-                host_port = port.get("hostPort", 0)
-                try:
-                    hp = int(host_port)
-                except (TypeError, ValueError):
+            for idx, container in enumerate(containers):
+                if not isinstance(container, dict):
                     continue
-                if hp > 0:
-                    findings.append(
-                        {
-                            "id": "SEC036",
-                            "severity": "HIGH",
-                            "kind": kind or "Unknown",
-                            "message": (
-                                f"Container '{cname}' sets hostPort={hp}. Avoid host-level port binding; "
-                                "prefer ClusterIP Service/Ingress exposure."
+
+                name = container.get("name", f"{field}[{idx}]")
+                c_drop = self._extract_drop_list(container.get("securityContext"))
+
+                effective_drop = c_drop if c_drop is not None else pod_drop
+                if not effective_drop or "ALL" not in {str(v).upper() for v in effective_drop}:
+                    issues.append(
+                        ValidationIssue(
+                            rule_id="SEC040",
+                            severity="high",
+                            path=f"spec.{field}[{idx}].securityContext.capabilities.drop",
+                            message=(
+                                f"{name}: missing explicit securityContext.capabilities.drop including 'ALL'."
                             ),
-                        }
+                        )
                     )
-        return findings
 
-    def _extract_pod_spec_and_metadata(self, manifest: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        kind = (manifest.get("kind") or "").strip()
-        spec = manifest.get("spec") or {}
+        return issues
 
-        if kind == "Pod":
-            return spec, manifest.get("metadata") or {}
-
-        if kind in {"Deployment", "StatefulSet", "DaemonSet", "Job"}:
-            template = spec.get("template") or {}
-            return template.get("spec") or {}, template.get("metadata") or {}
-
-        if kind == "CronJob":
-            template = (((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {})
-            return template.get("spec") or {}, template.get("metadata") or {}
-
-        return {}, {}
-
-    def _has_sec036_exception(self, metadata: Dict[str, Any]) -> bool:
-        annotations = (metadata or {}).get("annotations") or {}
-        for key, rule in self.EXCEPTION_ANNOTATIONS.items():
-            if rule == "SEC036" and str(annotations.get(key, "")).strip().lower() in {"true", "1", "yes", "allow"}:
-                return True
-        return False
+    @staticmethod
+    def _extract_drop_list(security_context: Any) -> Optional[List[Any]]:
+        if not isinstance(security_context, dict):
+            return None
+        capabilities = security_context.get("capabilities")
+        if not isinstance(capabilities, dict):
+            return None
+        drop = capabilities.get("drop")
+        if isinstance(drop, list):
+            return drop
+        return None
