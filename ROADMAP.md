@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add SEC038 Validator Rule for Missing CPU Limits on Containers (cycle 54)
+- [x] Add SEC039 Validator Rule to Require `allowPrivilegeEscalation: false` on All Containers (cycle 55)
