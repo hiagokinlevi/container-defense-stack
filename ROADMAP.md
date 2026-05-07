@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add SEC041 Validator Rule for Unsafe `hostNetwork: true` Usage in Pod Specs (cycle 57)
+- [x] Add SEC042 Validator Rule for Missing `terminationGracePeriodSeconds` in Pod Specs (cycle 58)
