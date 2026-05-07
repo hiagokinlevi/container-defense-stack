@@ -5,95 +5,77 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass
-class ValidationIssue:
+class Finding:
     rule_id: str
+    severity: str
     message: str
-    resource_kind: str
-    resource_name: str
-    remediation: str
+    resource: str
 
 
-def _safe_get(d: Dict[str, Any], path: List[str], default=None):
-    cur: Any = d
-    for p in path:
-        if not isinstance(cur, dict) or p not in cur:
-            return default
-        cur = cur[p]
-    return cur
+RULES: Dict[str, Dict[str, str]] = {
+    "SEC041": {
+        "severity": "HIGH",
+        "title": "Unsafe hostNetwork usage",
+        "description": "Flags workloads that enable spec.hostNetwork: true outside approved namespaces/exceptions.",
+    }
+}
+
+ALLOWED_HOSTNETWORK_NAMESPACES = {
+    "kube-system",
+    "kube-public",
+    "kube-node-lease",
+}
 
 
-def _pod_spec_and_meta(doc: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str, str]:
-    kind = str(doc.get("kind", ""))
-    name = str(_safe_get(doc, ["metadata", "name"], "<unknown>"))
+def _kind_name(doc: Dict[str, Any]) -> str:
+    kind = doc.get("kind", "Unknown")
+    name = ((doc.get("metadata") or {}).get("name")) or "unnamed"
+    ns = ((doc.get("metadata") or {}).get("namespace")) or "default"
+    return f"{kind}/{ns}/{name}"
 
+
+def _pod_spec(doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    kind = doc.get("kind")
+    spec = doc.get("spec") or {}
     if kind == "Pod":
-        return doc.get("spec"), kind, name
-    if kind in {"Deployment", "StatefulSet", "DaemonSet", "Job", "ReplicaSet", "ReplicationController"}:
-        return _safe_get(doc, ["spec", "template", "spec"]), kind, name
-    if kind == "CronJob":
-        return _safe_get(doc, ["spec", "jobTemplate", "spec", "template", "spec"]), kind, name
-    return None, kind, name
+        return spec
+    template = spec.get("template") or {}
+    return template.get("spec")
 
 
-def _all_containers(pod_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    containers: List[Dict[str, Any]] = []
-    for key in ("containers", "initContainers", "ephemeralContainers"):
-        value = pod_spec.get(key, [])
-        if isinstance(value, list):
-            containers.extend([c for c in value if isinstance(c, dict)])
-    return containers
+def _is_exception(doc: Dict[str, Any]) -> bool:
+    metadata = doc.get("metadata") or {}
+    ns = metadata.get("namespace", "default")
+    if ns in ALLOWED_HOSTNETWORK_NAMESPACES:
+        return True
+
+    annotations = metadata.get("annotations") or {}
+    if str(annotations.get("security.container-defense-stack.io/allow-hostnetwork", "")).lower() == "true":
+        return True
+
+    labels = metadata.get("labels") or {}
+    if str(labels.get("security.container-defense-stack.io/allow-hostnetwork", "")).lower() == "true":
+        return True
+
+    return False
 
 
-def _seccomp_type_from_security_context(sc: Optional[Dict[str, Any]]) -> Optional[str]:
-    if not isinstance(sc, dict):
-        return None
-    seccomp = sc.get("seccompProfile")
-    if not isinstance(seccomp, dict):
-        return None
-    t = seccomp.get("type")
-    return str(t) if t is not None else None
+def validate_manifest(docs: List[Dict[str, Any]]) -> List[Finding]:
+    findings: List[Finding] = []
 
-
-def validate_sec030(documents: List[Dict[str, Any]]) -> List[ValidationIssue]:
-    """
-    SEC030: Fail when neither pod-level nor container-level seccompProfile.type
-    is effectively set to RuntimeDefault for every container in workload pod templates.
-    """
-    issues: List[ValidationIssue] = []
-
-    for doc in documents:
-        pod_spec, kind, name = _pod_spec_and_meta(doc)
-        if pod_spec is None:
+    for doc in docs:
+        pod_spec = _pod_spec(doc)
+        if not pod_spec:
             continue
 
-        pod_sc = pod_spec.get("securityContext", {}) if isinstance(pod_spec, dict) else {}
-        pod_seccomp_type = _seccomp_type_from_security_context(pod_sc)
-
-        offenders: List[str] = []
-        for c in _all_containers(pod_spec):
-            cname = str(c.get("name", "<unnamed>"))
-            c_sc = c.get("securityContext", {}) if isinstance(c, dict) else {}
-            c_seccomp_type = _seccomp_type_from_security_context(c_sc)
-
-            effective = c_seccomp_type if c_seccomp_type is not None else pod_seccomp_type
-            if effective != "RuntimeDefault":
-                offenders.append(cname)
-
-        if offenders:
-            issues.append(
-                ValidationIssue(
-                    rule_id="SEC030",
-                    message=(
-                        f"{kind}/{name} has container(s) without effective seccompProfile.type=RuntimeDefault: "
-                        + ", ".join(offenders)
-                    ),
-                    resource_kind=kind,
-                    resource_name=name,
-                    remediation=(
-                        "Set spec.template.spec.securityContext.seccompProfile.type: RuntimeDefault "
-                        f"(or spec.securityContext for Pod), and ensure any container-level override also uses RuntimeDefault."
-                    ),
+        if pod_spec.get("hostNetwork") is True and not _is_exception(doc):
+            findings.append(
+                Finding(
+                    rule_id="SEC041",
+                    severity=RULES["SEC041"]["severity"],
+                    message="hostNetwork: true is not allowed unless explicitly approved for system namespaces or documented exceptions.",
+                    resource=_kind_name(doc),
                 )
             )
 
-    return issues
+    return findings
