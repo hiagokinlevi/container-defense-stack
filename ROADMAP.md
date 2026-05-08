@@ -41,4 +41,4 @@
 - [x] Add Gatekeeper Constraint for Privileged Container Deny (cycle 28)
 - [x] Add CLI Example for Policy Validation in CI (cycle 29)
 - [x] Add PodDisruptionBud
-- [x] Add SEC042 Validator Rule for Missing `terminationGracePeriodSeconds` in Pod Specs (cycle 58)
+- [x] Add SEC043 Validator Rule for Missing `seccompProfile.type: RuntimeDefault` in Pod/Container SecurityContext (cycle 59)
