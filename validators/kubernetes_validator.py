@@ -1,82 +1,85 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 
 
-@dataclass
-class ValidationFinding:
-    rule_id: str
-    severity: str
-    message: str
-    path: str
-
-
-RULES: Dict[str, Dict[str, str]] = {
-    "SEC001": {"severity": "HIGH", "title": "Privileged containers must be disabled"},
-    "SEC002": {"severity": "HIGH", "title": "Containers should not run as root"},
-    "SEC003": {"severity": "MEDIUM", "title": "Read-only root filesystem should be enabled"},
-    "SEC039": {
-        "severity": "HIGH",
-        "title": "Containers must set securityContext.allowPrivilegeEscalation=false",
-    },
+RULES: Dict[str, str] = {
+    "SEC043": "Workloads must set securityContext.seccompProfile.type to RuntimeDefault or Localhost at pod-level or per-container.",
 }
 
 
-SUPPORTED_KINDS = {"Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"}
+WORKLOAD_PODSPEC_PATHS = {
+    "Pod": ["spec"],
+    "Deployment": ["spec", "template", "spec"],
+    "Job": ["spec", "template", "spec"],
+    "CronJob": ["spec", "jobTemplate", "spec", "template", "spec"],
+}
 
 
-def _workload_template_spec(resource: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    kind = resource.get("kind")
-    spec = resource.get("spec", {})
-
-    if kind == "Pod":
-        return spec
-    if kind in {"Deployment", "StatefulSet", "DaemonSet", "Job"}:
-        return (((spec or {}).get("template") or {}).get("spec"))
-    if kind == "CronJob":
-        return (((((spec or {}).get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec"))
-    return None
+def _get_path(obj: Dict[str, Any], path: Iterable[str]) -> Optional[Dict[str, Any]]:
+    cur: Any = obj
+    for key in path:
+        if not isinstance(cur, dict) or key not in cur:
+            return None
+        cur = cur[key]
+    return cur if isinstance(cur, dict) else None
 
 
-def _iter_containers(template_spec: Dict[str, Any]) -> Iterable[Tuple[str, int, Dict[str, Any]]]:
-    for field in ("containers", "initContainers"):
-        for idx, container in enumerate(template_spec.get(field, []) or []):
-            if isinstance(container, dict):
-                yield field, idx, container
+def _seccomp_type(sc: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(sc, dict):
+        return None
+    seccomp = sc.get("seccompProfile")
+    if not isinstance(seccomp, dict):
+        return None
+    sec_type = seccomp.get("type")
+    return sec_type if isinstance(sec_type, str) else None
 
 
-def _check_sec039(resource: Dict[str, Any]) -> List[ValidationFinding]:
-    findings: List[ValidationFinding] = []
-    kind = resource.get("kind")
-    if kind not in SUPPORTED_KINDS:
-        return findings
-
-    template_spec = _workload_template_spec(resource)
-    if not isinstance(template_spec, dict):
-        return findings
-
-    for container_field, idx, container in _iter_containers(template_spec):
-        sc = container.get("securityContext") or {}
-        ape = sc.get("allowPrivilegeEscalation") if isinstance(sc, dict) else None
-        if ape is not False:
-            name = container.get("name", f"index-{idx}")
-            findings.append(
-                ValidationFinding(
-                    rule_id="SEC039",
-                    severity=RULES["SEC039"]["severity"],
-                    message=(
-                        f"{kind} {container_field} '{name}' must explicitly set "
-                        "securityContext.allowPrivilegeEscalation: false"
-                    ),
-                    path=f"spec.{container_field}[{idx}].securityContext.allowPrivilegeEscalation",
-                )
-            )
-
-    return findings
+def _allowed_seccomp(sec_type: Optional[str]) -> bool:
+    return sec_type in {"RuntimeDefault", "Localhost"}
 
 
-def validate_manifest_resource(resource: Dict[str, Any]) -> List[ValidationFinding]:
-    findings: List[ValidationFinding] = []
-    findings.extend(_check_sec039(resource))
+def _check_sec043(doc: Dict[str, Any]) -> List[Dict[str, str]]:
+    kind = doc.get("kind")
+    if kind not in WORKLOAD_PODSPEC_PATHS:
+        return []
+
+    podspec = _get_path(doc, WORKLOAD_PODSPEC_PATHS[kind])
+    if not isinstance(podspec, dict):
+        return []
+
+    pod_level_type = _seccomp_type(podspec.get("securityContext"))
+
+    containers = []
+    for field in ("containers", "initContainers", "ephemeralContainers"):
+        value = podspec.get(field)
+        if isinstance(value, list):
+            containers.extend([c for c in value if isinstance(c, dict)])
+
+    # If there are no containers, do not emit SEC043 here.
+    if not containers:
+        return []
+
+    if _allowed_seccomp(pod_level_type):
+        return []
+
+    for c in containers:
+        c_type = _seccomp_type(c.get("securityContext"))
+        if not _allowed_seccomp(c_type):
+            name = c.get("name", "<unnamed>")
+            return [
+                {
+                    "id": "SEC043",
+                    "message": f"Container '{name}' is missing seccompProfile.type RuntimeDefault/Localhost and no compliant pod-level default is set.",
+                }
+            ]
+
+    return []
+
+
+def validate_manifest_docs(docs: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    findings: List[Dict[str, str]] = []
+    for doc in docs:
+        if isinstance(doc, dict):
+            findings.extend(_check_sec043(doc))
     return findings
